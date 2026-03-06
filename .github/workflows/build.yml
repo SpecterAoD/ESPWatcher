@@ -1,0 +1,32 @@
+name: Build firmware
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Install PlatformIO
+        run: pip install platformio
+      - name: Inject local config
+        run: |
+          cat > include/config.local.h <<CFG
+          #pragma once
+          #define WIFI_SSID "${{ secrets.WIFI_SSID }}"
+          #define WIFI_PASS "${{ secrets.WIFI_PASS }}"
+          #define NETDATA_HOST "${{ secrets.NETDATA_HOST }}"
+          #define NETDATA_PORT 19999
+          #define NETDATA_TIMEOUT_MS 2500
+          #define NETDATA_POLL_MS 5000
+          #define OTA_MANIFEST_PATH "/firmware/manifest.json"
+          #define OTA_CHECK_MS 600000UL
+          #define OTA_AUTO_UPDATE_DEFAULT 0
+          CFG
+      - name: Build
+        run: pio run
