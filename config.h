@@ -4,8 +4,8 @@
 #include <ESP8266WiFi.h>
 
 // -------- WLAN (Heimnetz) ----------
-static const char* WIFI_SSID     = "ApfelPower";
-static const char* WIFI_PASS     = "1239vakfkaAFGHSDB1236987-.,!\"($%&/()glalgkartoooooooAVNNSgthoma";
+static const char* WIFI_SSID     = "WIFISSID";
+static const char* WIFI_PASS     = "WIFIPASS";
 
 // Optional: eigene feste IP (nur wenn du willst). Sonst DHCP.
 static const bool  USE_STATIC_IP = false;
