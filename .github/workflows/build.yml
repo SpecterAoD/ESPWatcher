@@ -3,17 +3,22 @@ name: Build firmware
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
+
       - name: Install PlatformIO
         run: pip install platformio
+
       - name: Inject local config
         run: |
           cat > include/config.local.h <<CFG
@@ -28,5 +33,16 @@ jobs:
           #define OTA_CHECK_MS 600000UL
           #define OTA_AUTO_UPDATE_DEFAULT 0
           CFG
+
       - name: Build
         run: pio run
+
+      - name: List build output
+        run: find .pio -maxdepth 4 -type f | sort
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: .pio/build/*/firmware.bin
+          if-no-files-found: error
