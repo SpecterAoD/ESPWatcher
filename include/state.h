@@ -2,6 +2,8 @@
 
 #include <Arduino.h>
 
+#include "config.h"
+
 enum class HealthState : uint8_t {
   GREEN = 0,
   YELLOW = 1,

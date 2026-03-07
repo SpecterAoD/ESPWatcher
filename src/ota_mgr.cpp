@@ -92,7 +92,7 @@ void otaLoop(AppState& state) {
 
   ESPhttpUpdate.rebootOnUpdate(true);
   if (strlen(md5) == 32) {
-    ESPhttpUpdate.setMD5(md5);
+    ESPhttpUpdate.setMD5sum(md5);
   }
 
   t_httpUpdate_return result = ESPhttpUpdate.update(client, baseUrl() + firmwarePath, FW_VERSION);
