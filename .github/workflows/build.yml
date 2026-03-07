@@ -20,19 +20,34 @@ jobs:
         run: pip install platformio
 
       - name: Inject local config
+        env:
+          WIFI_SSID: ${{ secrets.WIFI_SSID }}
+          WIFI_PASS: ${{ secrets.WIFI_PASS }}
+          NETDATA_HOST: ${{ secrets.NETDATA_HOST }}
         run: |
-          cat > include/config.local.h <<CFG
-          #pragma once
-          #define WIFI_SSID "${{ secrets.WIFI_SSID }}"
-          #define WIFI_PASS "${{ secrets.WIFI_PASS }}"
-          #define NETDATA_HOST "${{ secrets.NETDATA_HOST }}"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          def c_string(value: str) -> str:
+              return json.dumps(value if value is not None else "")
+
+          content = f"""#pragma once
+          #define WIFI_SSID {c_string(os.getenv("WIFI_SSID"))}
+          #define WIFI_PASS {c_string(os.getenv("WIFI_PASS"))}
+          #define NETDATA_HOST {c_string(os.getenv("NETDATA_HOST"))}
           #define NETDATA_PORT 19999
           #define NETDATA_TIMEOUT_MS 2500
           #define NETDATA_POLL_MS 5000
           #define OTA_MANIFEST_PATH "/firmware/manifest.json"
           #define OTA_CHECK_MS 600000UL
           #define OTA_AUTO_UPDATE_DEFAULT 0
-          CFG
+          """
+
+          Path("include").mkdir(parents=True, exist_ok=True)
+          Path("include/config.local.h").write_text(content, encoding="utf-8")
+          PY
 
       - name: Build
         run: pio run
