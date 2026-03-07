@@ -9,6 +9,8 @@
 #define NETDATA_TIMEOUT_MS 2500
 #define NETDATA_POLL_MS 5000
 
-#define OTA_MANIFEST_PATH "/firmware/manifest.json"
+#define OTA_PORT 8091
+#define OTA_MANIFEST_PATH "/manifest.json"
+#define OTA_FIRMWARE_PATH "/firmware.bin"
 #define OTA_CHECK_MS 600000UL
 #define OTA_AUTO_UPDATE_DEFAULT 0
