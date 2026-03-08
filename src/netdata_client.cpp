@@ -67,6 +67,29 @@ float parseChartValue(JsonVariantConst root, const char* preferredDim) {
 
   return NAN;
 }
+
+// Sum all non-time dimensions to get total CPU usage percentage.
+// This works because Netdata's system.cpu chart reports each dimension as
+// a percentage of total CPU time (user, system, iowait, softirq, etc.),
+// all of which are non-idle, so their sum equals total CPU usage.
+float sumCpuChartValues(JsonVariantConst root) {
+  JsonArrayConst labels = root["labels"].as<JsonArrayConst>();
+  JsonArrayConst values = root["data"][0].as<JsonArrayConst>();
+  if (labels.isNull() || values.isNull()) {
+    return NAN;
+  }
+  float sum = 0.0f;
+  bool hasValue = false;
+  for (size_t i = 0; i < labels.size() && i < values.size(); ++i) {
+    const char* label = labels[i] | "";
+    if (strcmp(label, "time") == 0) continue;
+    if (!values[i].isNull()) {
+      sum += values[i].as<float>();
+      hasValue = true;
+    }
+  }
+  return hasValue ? sum : NAN;
+}
 }  // namespace
 
 bool netdataPoll(MetricPoint& outPoint) {
@@ -77,7 +100,13 @@ bool netdataPoll(MetricPoint& outPoint) {
 
   bool okCpu = fetchJson("/api/v1/data?chart=system.cpu&points=1", doc);
   if (okCpu) {
-    outPoint.cpuUsage = parseChartValue(doc.as<JsonVariantConst>(), "user");
+    // Sum all non-time dimensions to get total CPU usage.
+    float total = sumCpuChartValues(doc.as<JsonVariantConst>());
+    if (!isnan(total)) {
+      outPoint.cpuUsage = total;
+    } else {
+      outPoint.cpuUsage = parseChartValue(doc.as<JsonVariantConst>(), "user");
+    }
   }
 
   doc.clear();
@@ -87,16 +116,27 @@ bool netdataPoll(MetricPoint& outPoint) {
     JsonArrayConst values = doc["data"][0].as<JsonArrayConst>();
     float used = NAN;
     float free = NAN;
+    float cached = NAN;
+    float buffers = NAN;
     for (size_t i = 0; i < labels.size() && i < values.size(); ++i) {
       const char* label = labels[i] | "";
       if (strcmp(label, "used") == 0) {
         used = values[i].as<float>();
       } else if (strcmp(label, "free") == 0) {
         free = values[i].as<float>();
+      } else if (strcmp(label, "cached") == 0) {
+        cached = values[i].as<float>();
+      } else if (strcmp(label, "buffers") == 0) {
+        buffers = values[i].as<float>();
       }
     }
-    if (!isnan(used) && !isnan(free) && (used + free) > 0.0f) {
-      outPoint.ramUsage = used * 100.0f / (used + free);
+    float total = 0.0f;
+    if (!isnan(used))    total += used;
+    if (!isnan(free))    total += free;
+    if (!isnan(cached))  total += cached;
+    if (!isnan(buffers)) total += buffers;
+    if (!isnan(used) && total > 0.0f) {
+      outPoint.ramUsage = used * 100.0f / total;
     }
   }
 
