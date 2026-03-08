@@ -26,37 +26,37 @@ jobs:
           NETDATA_HOST: ${{ secrets.NETDATA_HOST }}
         run: |
           python3 - <<'PY'
-import json
-import os
-import sys
-from pathlib import Path
+          import json
+          import os
+          import sys
+          from pathlib import Path
 
-def c_string(value: str) -> str:
-    return json.dumps(value if value is not None else "")
+          def c_string(value: str) -> str:
+              return json.dumps(value if value is not None else "")
 
-missing = [k for k in ("WIFI_SSID", "WIFI_PASS", "NETDATA_HOST") if os.getenv(k) is None]
-if missing:
-    print(f"ERROR: required secrets not set: {', '.join(missing)}", file=sys.stderr)
-    sys.exit(1)
+          missing = [k for k in ("WIFI_SSID", "WIFI_PASS", "NETDATA_HOST") if os.getenv(k) is None]
+          if missing:
+              print(f"ERROR: required secrets not set: {', '.join(missing)}", file=sys.stderr)
+              sys.exit(1)
 
-lines = [
-    "#pragma once",
-    f'#define WIFI_SSID {c_string(os.getenv("WIFI_SSID"))}',
-    f'#define WIFI_PASS {c_string(os.getenv("WIFI_PASS"))}',
-    f'#define NETDATA_HOST {c_string(os.getenv("NETDATA_HOST"))}',
-    "#define NETDATA_PORT 19999",
-    "#define NETDATA_TIMEOUT_MS 2500",
-    "#define NETDATA_POLL_MS 5000",
-    '#define OTA_MANIFEST_PATH "/firmware/manifest.json"',
-    "#define OTA_CHECK_MS 600000UL",
-    "#define OTA_AUTO_UPDATE_DEFAULT 0",
-]
-content = "\n".join(lines) + "\n"
+          lines = [
+              "#pragma once",
+              f'#define WIFI_SSID {c_string(os.getenv("WIFI_SSID"))}',
+              f'#define WIFI_PASS {c_string(os.getenv("WIFI_PASS"))}',
+              f'#define NETDATA_HOST {c_string(os.getenv("NETDATA_HOST"))}',
+              "#define NETDATA_PORT 19999",
+              "#define NETDATA_TIMEOUT_MS 2500",
+              "#define NETDATA_POLL_MS 5000",
+              '#define OTA_MANIFEST_PATH "/firmware/manifest.json"',
+              "#define OTA_CHECK_MS 600000UL",
+              "#define OTA_AUTO_UPDATE_DEFAULT 0",
+          ]
+          content = "\n".join(lines) + "\n"
 
-Path("include").mkdir(parents=True, exist_ok=True)
-Path("include/config.local.h").write_text(content, encoding="utf-8")
-print("config.local.h written successfully.")
-PY
+          Path("include").mkdir(parents=True, exist_ok=True)
+          Path("include/config.local.h").write_text(content, encoding="utf-8")
+          print("config.local.h written successfully.")
+          PY
 
       - name: Verify config.local.h
         run: |
