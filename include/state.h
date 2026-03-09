@@ -42,7 +42,19 @@ struct AppState {
   HealthState systemHealth = HealthState::YELLOW;
   bool wifiConnected = false;
   bool otaAutoEnabled = OTA_AUTO_UPDATE_DEFAULT;
+
   String otaStatus = "idle";
+  String localFwVersion;
+  String remoteFwVersion;
+  String otaLastError;
+  String otaFirmwareUrl;
+  bool otaUpdateAvailable = false;
+
+  String currentTime = "unavailable";
+  String dnsServer = DNS_SERVER_IP;
+  String deviceIp = "0.0.0.0";
+
   unsigned long lastPollMs = 0;
   unsigned long lastOtaCheckMs = 0;
+  unsigned long lastTimeSyncMs = 0;
 };
