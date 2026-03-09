@@ -14,6 +14,7 @@ Copy `include/config.example.h` to `include/config.local.h` and set:
 - `WIFI_SSID`
 - `WIFI_PASS`
 - `NETDATA_HOST`
+- optional overrides: `OTA_HOST`, `OTA_PORT`, `OTA_MANIFEST_PATH`, `SYSLOG_HOST`, `SYSLOG_PORT`, `TIME_SERVER_HOST`, `DNS_SERVER_IP`
 
 `config.local.h` is ignored by git.
 
@@ -40,12 +41,12 @@ Firmware binary output:
 
 ## OTA manifest format
 
-Expected at `OTA_MANIFEST_PATH` on the Netdata host.
+Expected at `http://OTA_HOST:OTA_PORT + OTA_MANIFEST_PATH`.
 
 ```json
 {
-  "version": "2.0.1",
-  "url": "/firmware/espwatcher-2.0.1.bin",
+  "version": "3.4.6",
+  "url": "/firmware.bin",
   "md5": "0123456789abcdef0123456789abcdef"
 }
 ```
