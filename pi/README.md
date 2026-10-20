@@ -32,8 +32,7 @@ stellt es den vorherigen Stand wieder her. Weitere Befehle: `status`, `uninstall
 Der Dienst beantwortet nur Anfragen aus dem LAN (`ESPW_ALLOW`, Standard `192.168.2.0/24`); alle anderen bekommen 403.
 Die DNS-Prüfungen laufen nur einmal pro Minute (`ESPW_DNS_EVERY`), damit sie die Pi-hole-Statistik nicht verfälschen.
 
-Falls auf dem Pi eine Firewall läuft (ufw/nftables), muss der TCP-Port 8092 aus dem LAN
-(192.168.2.0/24) erreichbar sein. Der Dienst lauscht nur auf `192.168.2.6`, nicht auf Tailscale.
+Ist `ufw` aktiv, gibt `install` den TCP-Port 8092 für 192.168.2.0/24 frei (`uninstall` entfernt die Regel). Der Dienst lauscht nur auf `192.168.2.6`, nicht auf Tailscale.
 
 Optional: Zeigt `ESPW_BACKUP_MARKER` auf eine Datei, die dein Backup-Skript nach jedem
 erfolgreichen Lauf mit `touch` aktualisiert, zeigt der ESP das Alter des letzten Backups an

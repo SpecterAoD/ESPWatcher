@@ -6,7 +6,7 @@
 #   sudo ./status-tool.sh uninstall   Dienst, Skript und Benutzer wieder entfernen
 #
 # Aendert nur: /usr/local/bin/espwatcher-status.py, /etc/systemd/system/espwatcher-status.service
-# und den Systembenutzer "espwatcher". Alles andere bleibt unberuehrt.
+# den Systembenutzer "espwatcher" und (bei aktivem ufw) eine Regel fuer das LAN.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -102,12 +102,19 @@ cmd_install() {
     done
     [ "$ok" = 1 ] || rollback
     rm -rf "$tmp"
+    # ufw: Port nur fuer das LAN freigeben (additiv, nur wenn ufw aktiv ist)
+    if command -v ufw >/dev/null && ufw status | grep -q "^Status: active"; then
+        if ! ufw status | grep -E "^$PORT/tcp +ALLOW +192\.168\.2\.0/24" >/dev/null; then
+            ufw allow from 192.168.2.0/24 to any port "$PORT" proto tcp comment 'ESPWatcher Status LAN' >/dev/null
+            echo "ufw: Port $PORT fuer 192.168.2.0/24 freigegeben"
+        fi
+    fi
     echo "Dienst laeuft. Aktuelle Antwort:"
     echo
     show
     echo
     echo "Naechster Schritt: im Browser des PCs http://$BIND:$PORT/status.json oeffnen."
-    echo "Kommt dort keine Antwort, blockiert eine Firewall (nft) den TCP-Port $PORT aus dem LAN."
+    echo "Kommt dort keine Antwort, blockiert eine Firewall den TCP-Port $PORT aus dem LAN."
 }
 
 cmd_status() {
@@ -121,6 +128,9 @@ cmd_uninstall() {
     rm -f "$UNIT" "$SCRIPT"
     systemctl daemon-reload
     id espwatcher >/dev/null 2>&1 && userdel espwatcher || true
+    if command -v ufw >/dev/null; then
+        ufw delete allow from 192.168.2.0/24 to any port "$PORT" proto tcp >/dev/null 2>&1 || true
+    fi
     echo "Status-Dienst entfernt."
 }
 
