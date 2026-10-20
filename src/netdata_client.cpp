@@ -16,16 +16,20 @@ String netdataUrl(const char* pathAndQuery) {
   return url;
 }
 
-bool fetchJson(const char* pathAndQuery, DynamicJsonDocument& doc) {
+// Holt JSON; optional mit ArduinoJson-Filter, damit grosse Antworten
+// (z. B. /api/v1/alarms) nicht den Speicher sprengen.
+bool fetchJson(const String& pathAndQuery, DynamicJsonDocument& doc, const JsonDocument* filter = nullptr) {
   if (WiFi.status() != WL_CONNECTED) {
     return false;
   }
 
   WiFiClient client;
   HTTPClient http;
-  if (!http.begin(client, netdataUrl(pathAndQuery))) {
+  if (!http.begin(client, netdataUrl(pathAndQuery.c_str()))) {
     return false;
   }
+  // HTTP/1.0 verhindert "chunked"-Antworten, die getStream() nicht dekodiert.
+  http.useHTTP10(true);
   http.setTimeout(NETDATA_TIMEOUT_MS);
 
   int code = http.GET();
@@ -34,11 +38,14 @@ bool fetchJson(const char* pathAndQuery, DynamicJsonDocument& doc) {
     return false;
   }
 
-  DeserializationError err = deserializeJson(doc, http.getStream());
+  DeserializationError err = filter
+                                 ? deserializeJson(doc, http.getStream(), DeserializationOption::Filter(*filter))
+                                 : deserializeJson(doc, http.getStream());
   http.end();
   return !err;
 }
 
+// Wert einer bestimmten Dimension (Spalte "label"), sonst erster nicht-leerer Wert.
 float parseChartValue(JsonVariantConst root, const char* preferredDim) {
   JsonArrayConst labels = root["labels"].as<JsonArrayConst>();
   JsonArrayConst values = root["data"][0].as<JsonArrayConst>();
@@ -46,17 +53,11 @@ float parseChartValue(JsonVariantConst root, const char* preferredDim) {
     return NAN;
   }
 
-  int preferredIndex = -1;
-  for (size_t i = 0; i < labels.size(); ++i) {
+  for (size_t i = 0; i < labels.size() && i < values.size(); ++i) {
     const char* label = labels[i] | "";
-    if (strcmp(label, preferredDim) == 0) {
-      preferredIndex = static_cast<int>(i);
-      break;
+    if (strcmp(label, preferredDim) == 0 && !values[i].isNull()) {
+      return values[i].as<float>();
     }
-  }
-
-  if (preferredIndex >= 0 && static_cast<size_t>(preferredIndex) < values.size()) {
-    return values[preferredIndex].as<float>();
   }
 
   for (size_t i = 1; i < values.size(); ++i) {
@@ -67,6 +68,27 @@ float parseChartValue(JsonVariantConst root, const char* preferredDim) {
 
   return NAN;
 }
+
+// Summe aller Dimensionen (Spalte 0 ist die Zeit) und ggf. Wert einer Dimension.
+bool sumChart(JsonVariantConst root, const char* pickDim, float& sum, float& picked) {
+  JsonArrayConst labels = root["labels"].as<JsonArrayConst>();
+  JsonArrayConst values = root["data"][0].as<JsonArrayConst>();
+  if (labels.isNull() || values.isNull()) {
+    return false;
+  }
+
+  sum = 0.0f;
+  picked = NAN;
+  for (size_t i = 1; i < values.size() && i < labels.size(); ++i) {
+    if (values[i].isNull()) continue;
+    const float v = values[i].as<float>();
+    sum += v;
+    if (pickDim && strcmp(labels[i] | "", pickDim) == 0) {
+      picked = v;
+    }
+  }
+  return true;
+}
 }  // namespace
 
 bool netdataPoll(MetricPoint& outPoint) {
@@ -75,37 +97,40 @@ bool netdataPoll(MetricPoint& outPoint) {
 
   DynamicJsonDocument doc(2048);
 
+  // CPU zuerst: Antwortet Netdata gar nicht, brechen wir sofort ab, statt
+  // jede weitere Abfrage einzeln in den Timeout laufen zu lassen.
   bool okCpu = fetchJson("/api/v1/data?chart=system.cpu&points=1", doc);
-  if (okCpu) {
-    outPoint.cpuUsage = parseChartValue(doc.as<JsonVariantConst>(), "user");
+  if (!okCpu) {
+    outPoint.alertSummary = "Netdata nicht erreichbar";
+    return false;
+  }
+  {
+    // system.cpu enthaelt nur belegte Anteile (kein "idle") -> Summe = Auslastung.
+    float sum = 0.0f;
+    float unused = NAN;
+    if (sumChart(doc.as<JsonVariantConst>(), nullptr, sum, unused)) {
+      outPoint.cpuUsage = constrain(sum, 0.0f, 100.0f);
+    }
   }
 
   doc.clear();
   bool okRam = fetchJson("/api/v1/data?chart=system.ram&points=1", doc);
   if (okRam) {
-    JsonArrayConst labels = doc["labels"].as<JsonArrayConst>();
-    JsonArrayConst values = doc["data"][0].as<JsonArrayConst>();
+    float total = 0.0f;
     float used = NAN;
-    float free = NAN;
-    for (size_t i = 0; i < labels.size() && i < values.size(); ++i) {
-      const char* label = labels[i] | "";
-      if (strcmp(label, "used") == 0) {
-        used = values[i].as<float>();
-      } else if (strcmp(label, "free") == 0) {
-        free = values[i].as<float>();
-      }
-    }
-    if (!isnan(used) && !isnan(free) && (used + free) > 0.0f) {
-      outPoint.ramUsage = used * 100.0f / (used + free);
+    if (sumChart(doc.as<JsonVariantConst>(), "used", total, used) && total > 0.0f && !isnan(used)) {
+      outPoint.ramUsage = used * 100.0f / total;
     }
   }
 
   doc.clear();
-  bool okTemp = fetchJson("/api/v1/data?chart=sensors.temp&points=1", doc);
+  String tempPath = String("/api/v1/data?chart=") + NETDATA_TEMP_CHART + "&points=1";
+  bool okTemp = fetchJson(tempPath, doc);
   if (okTemp) {
     outPoint.temperature = parseChartValue(doc.as<JsonVariantConst>(), "temp");
-  } else {
-    outPoint.unavailableMetrics += "temperature ";
+  }
+  if (!okTemp || isnan(outPoint.temperature)) {
+    outPoint.unavailableMetrics += "Temperatur ";
   }
 
   doc.clear();
@@ -115,7 +140,9 @@ bool netdataPoll(MetricPoint& outPoint) {
   }
 
   doc.clear();
-  bool okAlarms = fetchJson("/api/v1/alarms", doc);
+  StaticJsonDocument<128> filter;
+  filter["alarms"]["*"]["status"] = true;
+  bool okAlarms = fetchJson("/api/v1/alarms", doc, &filter);
   if (okAlarms) {
     JsonObjectConst alarms = doc["alarms"].as<JsonObjectConst>();
     for (JsonPairConst kv : alarms) {
@@ -126,21 +153,11 @@ bool netdataPoll(MetricPoint& outPoint) {
         outPoint.warningAlerts++;
       }
     }
-    outPoint.alertSummary = String("W:") + outPoint.warningAlerts + " C:" + outPoint.criticalAlerts;
+    outPoint.alertSummary = String("Warnungen: ") + outPoint.warningAlerts + ", kritisch: " + outPoint.criticalAlerts;
   } else {
-    outPoint.alertSummary = "alarms unavailable";
+    outPoint.alertSummary = "Alarme nicht verfügbar";
   }
 
-  doc.clear();
-  bool okThrottle = fetchJson("/api/v1/data?chart=raspberry_pi.throttled&points=1", doc);
-  if (okThrottle) {
-    float value = parseChartValue(doc.as<JsonVariantConst>(), "throttled");
-    outPoint.throttledAvailable = !isnan(value);
-    outPoint.throttled = value > 0.5f;
-  } else {
-    outPoint.unavailableMetrics += "throttle_status ";
-  }
-
-  outPoint.netdataReachable = okCpu || okRam || okTemp || okLoad || okAlarms;
-  return outPoint.netdataReachable;
+  outPoint.netdataReachable = true;
+  return true;
 }

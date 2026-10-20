@@ -1,51 +1,85 @@
 # ESPWatcher (ESP8266 / Wemos D1 mini)
 
-Netdata-only monitoring firmware for a Raspberry Pi.
+Heimnetz-Wächter für den Raspberry Pi **piholepi** (Pi-hole, Unbound, dnsdist, keepalived).
+Zeigt auf einer Weboberfläche und einer LED-Ampel auf einen Blick, ob alles läuft, welcher DNS
+gerade aktiv ist und welcher Dienst ausgefallen ist. Kein MQTT nötig.
 
-## Scope
+## Datenquellen
 
-This firmware intentionally **does not** perform direct checks (ping, port, DNS, service probing, remote commands).
-All telemetry is pulled from Netdata API endpoints.
+1. **Status-JSON** vom piholepi (`pi/espwatcher-status.py`): Dienste, aktiver DNS (piholepi/pizero),
+   DNS-Antworten, Datenplatte, Backup-Alter, Temperatur, Unterspannung. Installation: siehe `pi/README.md`.
+2. **Netdata** (optional, ergänzend): CPU, RAM, Load, Alarme. Fehlende Werte (z. B. Temperatur)
+   werden aus dem Status-JSON ergänzt.
 
-## Required local config
+Die Firmware führt selbst keine Pings, Port- oder DNS-Tests aus – das erledigt der Status-Dienst auf dem Pi.
 
-Copy `include/config.example.h` to `include/config.local.h` and set:
+## Bewertung (Ampel)
 
-- `WIFI_SSID`
-- `WIFI_PASS`
-- `NETDATA_HOST`
-- optional overrides: `OTA_HOST`, `OTA_PORT`, `OTA_MANIFEST_PATH`, `SYSLOG_HOST`, `SYSLOG_PORT`, `TIME_SERVER_HOST`, `DNS_SERVER_IP`
+| Farbe | Bedeutung |
+| ----- | --------- |
+| grün | alles in Ordnung |
+| gelb | Achtung: z. B. nicht kritischer Dienst aus, DNS läuft auf pizero (Failover), Backup > 36 h alt, Platte > 90 % voll, Netdata-Warnung, CPU > 70 °C, Status-JSON oder Netdata nicht erreichbar |
+| rot (blinkt) | Störung: kritischer Dienst (pihole-FTL, unbound, dnsdist, keepalived) aus, DNS antwortet nicht, kritischer Netdata-Alarm, CPU > 80 °C, piholepi nicht erreichbar |
 
-`config.local.h` is ignored by git.
+Ohne WLAN blinkt die gelbe LED schnell.
 
-## Build
+## Weboberfläche
+
+- `/` Übersicht mit Gesamtstatus, aktivem DNS, Dienst-Kacheln, DNS-Erreichbarkeit und Messwerten (aktualisiert sich alle 10 s)
+- `/charts` Verlauf der letzten Minuten (CPU, RAM, Temperatur)
+- `/links` Schnellzugriff auf Netdata, Pi-hole, dnsdist, Status-JSON
+- `/api/state` Zustand als JSON
+
+## LED-Ampel anschließen (Wemos D1 mini)
+
+| LED | Pin | GPIO |
+| --- | --- | ---- |
+| grün | D5 | 14 |
+| gelb | D6 | 12 |
+| rot | D7 | 13 |
+
+Jede LED mit 220–330 Ω Vorwiderstand gegen GND. Anderes Layout oder ohne LEDs: siehe `LED_*` in der Konfiguration.
+
+## Konfiguration
+
+`include/config.example.h` nach `include/config.local.h` kopieren und mindestens setzen:
+
+- `WIFI_SSID`, `WIFI_PASS`
+- `NETDATA_HOST` (piholepi, `192.168.2.6`)
+
+Alle weiteren Werte sind optional (Standardwerte in `include/config.h`), u. a. `PIZERO_HOST`, `DNS_VIP`,
+`STATUS_PORT`, `NETDATA_TEMP_CHART`, `SYSLOG_HOST`, `TIME_SERVER_HOST`, `LED_*`.
+`config.local.h` wird von git ignoriert.
+
+OTA ist nur aktiv, wenn `OTA_HOST` gesetzt ist (Manifest siehe unten).
+
+## Build und Flashen
 
 ```bash
-pio run
+pio run                  # Firmware bauen
+pio run -t upload        # per USB auf den D1 mini flashen
+pio device monitor       # serielle Ausgabe (115200)
 ```
 
-Firmware binary output:
+Firmware: `.pio/build/d1_mini/firmware.bin`. Meldungen gehen zusätzlich per Syslog an `SYSLOG_HOST`
+(Zustandswechsel mit Begründung unter dem Tag `HEALTH`).
 
-```text
-.pio/build/d1_mini/firmware.bin
-```
-
-## Netdata endpoints used
+## Netdata-Endpunkte
 
 - `/api/v1/data?chart=system.cpu&points=1`
 - `/api/v1/data?chart=system.ram&points=1`
-- `/api/v1/data?chart=sensors.temp&points=1`
+- `/api/v1/data?chart=<NETDATA_TEMP_CHART>&points=1` (Standard `sensors.temp`; Chart-Namen prüfen:
+  `curl -s http://192.168.2.6:19999/api/v1/charts | grep -io '"sensors[^"]*"'`)
 - `/api/v1/data?chart=system.load&points=1`
 - `/api/v1/alarms`
-- `/api/v1/data?chart=raspberry_pi.throttled&points=1` (optional)
 
-## OTA manifest format
+## OTA-Manifest
 
-Expected at `http://OTA_HOST:OTA_PORT + OTA_MANIFEST_PATH`.
+Erwartet unter `http://OTA_HOST:OTA_PORT + OTA_MANIFEST_PATH`.
 
 ```json
 {
-  "version": "3.4.6",
+  "version": "3.5.0",
   "url": "/firmware.bin",
   "md5": "0123456789abcdef0123456789abcdef"
 }

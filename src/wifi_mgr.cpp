@@ -8,8 +8,9 @@
 
 namespace {
 constexpr unsigned long WIFI_RETRY_MS = 10000UL;
-constexpr unsigned long TIME_SYNC_MS = 60000UL;
+constexpr unsigned long TIME_SYNC_MS = 30000UL;
 bool lastConnected = false;
+bool timeLogged = false;
 unsigned long lastRetry = 0;
 
 void updateNetworkState(AppState& state) {
@@ -26,7 +27,6 @@ void syncTime(AppState& state) {
   time_t now = time(nullptr);
   if (now < 100000) {
     state.currentTime = "syncing";
-    logMessage("NTP", "Time not synchronized yet", LogLevel::WARN);
     return;
   }
 
@@ -35,21 +35,25 @@ void syncTime(AppState& state) {
   char buf[24];
   strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tmValue);
   state.currentTime = buf;
-  logMessage("NTP", String("Time synchronized: ") + state.currentTime);
+  if (!timeLogged) {
+    timeLogged = true;
+    logMessage("NTP", String("Time synchronized: ") + state.currentTime);
+  }
 }
 }  // namespace
 
 void wifiSetup(AppState& state) {
+  WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
-  IPAddress dns;
-  dns.fromString(DNS_SERVER_IP);
-  WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, dns);
+  WiFi.hostname("espwatcher");
+  WiFi.setAutoReconnect(true);
 
+  // Feste Adresse/DNS wird bewusst nicht gesetzt: DHCP vom Router genuegt, da
+  // alle Ziele per IP angesprochen werden.
   WiFi.begin(WIFI_SSID, WIFI_PASS);
-  configTime(0, 0, TIME_SERVER_HOST);
+  configTime(TIME_ZONE, TIME_SERVER_HOST);
 
   state.wifiConnected = false;
-  state.dnsServer = DNS_SERVER_IP;
   logMessage("WIFI", String("Connecting to SSID '") + WIFI_SSID + "'");
   logMessage("NTP", String("Configured time server ") + TIME_SERVER_HOST);
 }

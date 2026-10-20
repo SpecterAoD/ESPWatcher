@@ -1,15 +1,95 @@
 #include "health_eval.h"
 
-HealthState evaluateHealth(const MetricPoint& point) {
-  if (!point.netdataReachable || point.criticalAlerts > 0) {
-    return HealthState::RED;
+#include "status_client.h"
+
+namespace {
+struct Collector {
+  HealthState level = HealthState::GREEN;
+  String text;
+
+  void add(HealthState lvl, const String& msg) {
+    if (static_cast<uint8_t>(lvl) > static_cast<uint8_t>(level)) {
+      level = lvl;
+    }
+    if (text.length() < 160) {
+      if (text.length()) text += "; ";
+      text += msg;
+    }
+  }
+};
+}  // namespace
+
+HealthState evaluateHealth(const MetricPoint& point, const StatusPoint& status, String* reason) {
+  Collector c;
+
+  if (!point.netdataReachable && !status.reachable) {
+    c.add(HealthState::RED, "piholepi nicht erreichbar");
+  } else {
+    if (!point.netdataReachable) {
+      c.add(HealthState::YELLOW, "Netdata antwortet nicht");
+    }
+    if (!status.reachable) {
+      c.add(HealthState::YELLOW, "Status-JSON antwortet nicht");
+    }
   }
 
-  if (point.warningAlerts > 0 || (point.temperature > 70.0f && !isnan(point.temperature))) {
-    return HealthState::YELLOW;
+  if (status.reachable) {
+    if (status.stale) {
+      c.add(HealthState::YELLOW, "Status-Daten veraltet");
+    }
+
+    for (uint8_t i = 0; i < status.serviceCount; ++i) {
+      const ServiceEntry& s = status.services[i];
+      if (s.state == SvcState::FAILED || s.state == SvcState::INACTIVE) {
+        c.add(s.critical ? HealthState::RED : HealthState::YELLOW, String(s.name) + ": " + svcStateToText(s.state));
+      }
+    }
+
+    if (status.activeDns == "pizero") {
+      c.add(HealthState::YELLOW, "DNS aktiv auf pizero (Failover)");
+    } else if (status.activeDns != "piholepi") {
+      c.add(HealthState::YELLOW, "aktiver DNS unbekannt");
+    }
+
+    if (status.dnsLocal == 0) c.add(HealthState::RED, "DNS auf piholepi antwortet nicht");
+    if (status.dnsVip == 0) c.add(HealthState::RED, "DNS-VIP antwortet nicht");
+    if (status.dnsPizero == 0) c.add(HealthState::YELLOW, "DNS auf pizero antwortet nicht");
+
+    if (status.diskMounted == 0) {
+      c.add(HealthState::YELLOW, "Datenplatte nicht eingehängt");
+    } else if (!isnan(status.diskUsedPct) && status.diskUsedPct > 90.0f) {
+      c.add(HealthState::YELLOW, String("Datenplatte ") + String(status.diskUsedPct, 0) + "% voll");
+    }
+
+    if (!isnan(status.backupAgeH) && status.backupAgeH > 36.0f) {
+      c.add(HealthState::YELLOW, String("Backup ") + String(status.backupAgeH, 0) + " h alt");
+    }
+
+    if (status.throttled == 1) {
+      c.add(HealthState::YELLOW, "Pi gedrosselt/Unterspannung");
+    }
   }
 
-  return HealthState::GREEN;
+  if (point.netdataReachable) {
+    if (point.criticalAlerts > 0) {
+      c.add(HealthState::RED, String(point.criticalAlerts) + " kritische Netdata-Alarme");
+    } else if (point.warningAlerts > 0) {
+      c.add(HealthState::YELLOW, String(point.warningAlerts) + " Netdata-Warnungen");
+    }
+  }
+
+  if (!isnan(point.temperature)) {
+    if (point.temperature > 80.0f) {
+      c.add(HealthState::RED, String("CPU ") + String(point.temperature, 0) + " °C");
+    } else if (point.temperature > 70.0f) {
+      c.add(HealthState::YELLOW, String("CPU ") + String(point.temperature, 0) + " °C");
+    }
+  }
+
+  if (reason) {
+    *reason = c.text;
+  }
+  return c.level;
 }
 
 const char* healthToText(HealthState state) {
@@ -22,5 +102,18 @@ const char* healthToText(HealthState state) {
       return "RED";
     default:
       return "UNKNOWN";
+  }
+}
+
+const char* healthToGerman(HealthState state) {
+  switch (state) {
+    case HealthState::GREEN:
+      return "Alles in Ordnung";
+    case HealthState::YELLOW:
+      return "Achtung";
+    case HealthState::RED:
+      return "Störung";
+    default:
+      return "Unbekannt";
   }
 }

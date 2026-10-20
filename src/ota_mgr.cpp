@@ -61,7 +61,12 @@ void otaSetup(AppState& state) {
   state.otaStatus = "idle";
   state.otaUpdateAvailable = false;
   state.otaFirmwareUrl = otaBaseUrl() + "/firmware.bin";
+#if OTA_CONFIGURED
   logMessage("OTA", String("OTA configured with manifest ") + otaBaseUrl() + OTA_MANIFEST_PATH);
+#else
+  state.otaStatus = "nicht konfiguriert";
+  logMessage("OTA", "OTA not configured (OTA_HOST not set); update checks disabled");
+#endif
 }
 
 void otaSetAuto(AppState& state, bool enabled) {
@@ -74,6 +79,10 @@ bool otaAutoEnabled(const AppState& state) {
 }
 
 void otaLoop(AppState& state) {
+#if !OTA_CONFIGURED
+  (void)state;
+  return;
+#endif
   if (!state.wifiConnected || millis() - state.lastOtaCheckMs < OTA_CHECK_MS) {
     return;
   }
