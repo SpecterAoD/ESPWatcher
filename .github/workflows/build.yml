@@ -24,6 +24,9 @@ jobs:
           WIFI_SSID: ${{ secrets.WIFI_SSID }}
           WIFI_PASS: ${{ secrets.WIFI_PASS }}
           NETDATA_HOST: ${{ secrets.NETDATA_HOST }}
+          # OTA-Server (nginx auf dem piholepi); ueberschreibbar ueber Repository-Variablen
+          OTA_HOST: ${{ vars.OTA_HOST || '192.168.2.6' }}
+          OTA_PORT: ${{ vars.OTA_PORT || '8091' }}
         run: |
           python3 - <<'PY'
           import json
@@ -47,7 +50,9 @@ jobs:
               "#define NETDATA_PORT 19999",
               "#define NETDATA_TIMEOUT_MS 2500",
               "#define NETDATA_POLL_MS 5000",
-              '#define OTA_MANIFEST_PATH "/firmware/manifest.json"',
+              f'#define OTA_HOST {c_string(os.getenv("OTA_HOST"))}',
+              f'#define OTA_PORT {int(os.getenv("OTA_PORT"))}',
+              '#define OTA_MANIFEST_PATH "/manifest.json"',
               "#define OTA_CHECK_MS 600000UL",
               "#define OTA_AUTO_UPDATE_DEFAULT 0",
           ]
@@ -67,9 +72,9 @@ jobs:
             -e 's/\(NETDATA_HOST\s\+\)"[^"]*"/\1"***"/' \
             include/config.local.h
           echo "=== define count ==="
-          test "$(grep -c '^#define' include/config.local.h)" -eq 9 || \
+          test "$(grep -c '^#define' include/config.local.h)" -eq 11 || \
             { echo "ERROR: unexpected number of #define lines"; exit 1; }
-          echo "All 9 defines present."
+          echo "All 11 defines present."
 
       - name: Build
         run: pio run
@@ -77,9 +82,23 @@ jobs:
       - name: List build output
         run: find .pio -maxdepth 4 -type f | sort
 
+      - name: Create OTA bundle (firmware.bin + manifest.json)
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -n 's/^#define FW_VERSION "\(.*\)"/\1/p' include/version.h)"
+          test -n "$VERSION" || { echo "ERROR: FW_VERSION not found"; exit 1; }
+          mkdir -p ota
+          cp .pio/build/d1_mini/firmware.bin ota/firmware.bin
+          MD5="$(md5sum ota/firmware.bin | cut -d' ' -f1)"
+          printf '{\n  "version": "%s",\n  "url": "/firmware.bin",\n  "md5": "%s"\n}\n' "$VERSION" "$MD5" > ota/manifest.json
+          echo "=== ota/manifest.json ==="
+          cat ota/manifest.json
+
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: firmware
-          path: .pio/build/*/firmware.bin
+          path: |
+            ota/firmware.bin
+            ota/manifest.json
           if-no-files-found: error

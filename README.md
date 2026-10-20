@@ -51,7 +51,10 @@ Alle weiteren Werte sind optional (Standardwerte in `include/config.h`), u. a. `
 `STATUS_PORT`, `NETDATA_TEMP_CHART`, `SYSLOG_HOST`, `TIME_SERVER_HOST`, `LED_*`.
 `config.local.h` wird von git ignoriert.
 
-OTA ist nur aktiv, wenn `OTA_HOST` gesetzt ist (Manifest siehe unten).
+OTA ist nur aktiv, wenn `OTA_HOST` gesetzt ist (Manifest siehe unten). Der GitHub-Build setzt es automatisch
+(`192.168.2.6:8091`, überschreibbar über die Repository-Variablen `OTA_HOST` und `OTA_PORT`) und liefert im Artifact
+`firmware` neben der `firmware.bin` auch das passende `manifest.json`. Den Server dafür (nginx auf dem piholepi) und
+das Ausrollen beschreibt `pi/ota/README.md`.
 
 ## Build und Flashen
 
