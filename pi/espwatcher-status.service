@@ -30,7 +30,8 @@ PrivateTmp=yes
 PrivateDevices=no
 ProtectKernelTunables=yes
 ProtectControlGroups=yes
-RestrictAddressFamilies=AF_INET AF_UNIX
+# AF_NETLINK braucht 'ip addr' (wer haelt die keepalived-Adresse?), AF_UNIX der systemd-Zugriff
+RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK
 MemoryMax=64M
 
 [Install]

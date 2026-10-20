@@ -19,14 +19,13 @@ Von „Merge" bis „ESP läuft mit neuer Version" vergehen höchstens etwa 25 M
 ## Einmalig einrichten (auf dem piholepi)
 
 ```bash
-git clone --depth 1 -b claude/status-led-3-5-0 https://github.com/SpecterAoD/ESPWatcher.git ~/espwatcher-src
+git clone --depth 1 https://github.com/SpecterAoD/ESPWatcher.git ~/espwatcher-src
 cd ~/espwatcher-src/pi/ota
 sudo ./ota-tool.sh install
 ```
 
 `install` sichert `/mnt/data/ota` nach `/mnt/data/ota.bak-<Zeitstempel>`, setzt das neue `gen_manifest.py` ein, legt den
 Abholdienst `espwatcher-ota-pull` (Dienst + Timer) an, schaltet den Timer ein und sucht sofort nach einem Release.
-Nach dem Merge den Branch-Namen im `git clone` durch `main` ersetzen.
 
 Die vorhandenen Teile (nginx auf 8091, `esp-ota-manifest.*`, Port 8090) bleiben unverändert.
 

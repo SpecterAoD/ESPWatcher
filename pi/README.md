@@ -7,7 +7,7 @@ Er prüft alle 5 Sekunden im Hintergrund und liefert das Ergebnis als JSON unter
 Geprüft werden:
 
 - Dienste per systemd: `pihole-FTL`, `unbound`, `dnsdist`, `keepalived` (kritisch, ESP zeigt ROT)
-  sowie `chrony`, `netdata`, `tailscaled` (nicht kritisch, ESP zeigt GELB)
+  sowie `nginx`, `chrony`, `netdata`, `tailscaled`, `pihole-dns-policy`, `nft-localonly` (nicht kritisch, ESP zeigt GELB)
 - wer die keepalived-Adresse `192.168.2.10` gerade hält (`piholepi` oder `pizero`)
 - ob DNS antwortet: lokal auf dem piholepi, auf der VIP und auf pizero (`192.168.2.5`)
 - Datenplatte `/mnt/data` (eingehängt? wie voll?), CPU-Temperatur, Load, RAM,
@@ -17,23 +17,20 @@ Die Dienstliste lässt sich in `espwatcher-status.py` (`DEFAULT_SERVICES`) oder 
 `ESPW_SERVICES="name:1,name:0"` anpassen (`1` = kritisch).
 Der Name der WireGuard-Einheit (z. B. `wg-quick@wg0`) ist nicht vorbelegt.
 
-## Installation (auf dem piholepi, mit Root-Rechten)
+## Installation (auf dem piholepi)
 
 ```bash
-# 1. Eigener Benutzer ohne Login und ohne Rechte
-sudo useradd --system --no-create-home --shell /usr/sbin/nologin --groups video espwatcher
-
-# 2. Skript und Dienst installieren
-sudo install -m 0755 espwatcher-status.py /usr/local/bin/espwatcher-status.py
-sudo install -m 0644 espwatcher-status.service /etc/systemd/system/espwatcher-status.service
-
-# 3. Starten
-sudo systemctl daemon-reload
-sudo systemctl enable --now espwatcher-status.service
-
-# 4. Testen
-curl -s http://192.168.2.6:8092/status.json | python3 -m json.tool
+git clone --depth 1 https://github.com/SpecterAoD/ESPWatcher.git ~/espwatcher-src
+cd ~/espwatcher-src/pi
+sudo ./status-tool.sh install
 ```
+
+Das Werkzeug prüft vorher Python, systemd, die Adresse `192.168.2.6` und den freien Port 8092, legt den Benutzer
+`espwatcher` an, installiert Skript und Dienst, startet ihn und zeigt die erste Antwort. Antwortet der Dienst nicht,
+stellt es den vorherigen Stand wieder her. Weitere Befehle: `status`, `uninstall`.
+
+Der Dienst beantwortet nur Anfragen aus dem LAN (`ESPW_ALLOW`, Standard `192.168.2.0/24`); alle anderen bekommen 403.
+Die DNS-Prüfungen laufen nur einmal pro Minute (`ESPW_DNS_EVERY`), damit sie die Pi-hole-Statistik nicht verfälschen.
 
 Falls auf dem Pi eine Firewall läuft (ufw/nftables), muss der TCP-Port 8092 aus dem LAN
 (192.168.2.0/24) erreichbar sein. Der Dienst lauscht nur auf `192.168.2.6`, nicht auf Tailscale.
@@ -45,9 +42,7 @@ und warnt ab 36 Stunden.
 ## Rückgängig machen
 
 ```bash
-sudo systemctl disable --now espwatcher-status.service
-sudo rm /etc/systemd/system/espwatcher-status.service /usr/local/bin/espwatcher-status.py
-sudo userdel espwatcher
+sudo ./status-tool.sh uninstall
 ```
 
 ## Beispiel-Antwort
@@ -60,3 +55,7 @@ sudo userdel espwatcher
  "temp":48.3,"load1":0.12,"mem":31.5,"thr":0,"backup_h":5.2,
  "ts":1760000000,"age_s":2.1}
 ```
+
+## Tests
+
+`python3 -I test_status.py` prüft Dienstzustände, Erkennung der VIP, DNS-Prüfung (gegen eine Attrappe), Drosselung, LAN-Beschränkung und das JSON. Der GitHub-Build führt ihn mit aus.
