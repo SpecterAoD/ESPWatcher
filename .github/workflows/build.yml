@@ -1,9 +1,20 @@
 name: Build firmware
 
+# Der Build braucht KEINE Secrets und baut keine WLAN-Zugangsdaten in die Firmware ein
+# (das Repo ist oeffentlich, Artifacts und Releases sind es auch). Der ESP nutzt die beim
+# ersten Flashen im Flash gespeicherten Zugangsdaten.
+#
+# Bei einem Push auf main erzeugt der Lauf zusaetzlich ein Release (firmware-<version>.bin
+# + .sha256). Der piholepi holt es von dort selbst ab (pi/ota/espwatcher-ota-pull.py).
+# Dafuer FW_VERSION in include/version.h bei jeder Aenderung erhoehen.
+
 on:
   push:
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -16,65 +27,55 @@ jobs:
         with:
           python-version: '3.x'
 
+      - name: Test the Pi OTA tooling
+        run: python3 -I pi/ota/test_pull.py
+
       - name: Install PlatformIO
         run: pip install platformio
 
-      - name: Inject local config
+      - name: Write public build config (no credentials)
         env:
-          WIFI_SSID: ${{ secrets.WIFI_SSID }}
-          WIFI_PASS: ${{ secrets.WIFI_PASS }}
-          NETDATA_HOST: ${{ secrets.NETDATA_HOST }}
-          # OTA-Server (nginx auf dem piholepi); ueberschreibbar ueber Repository-Variablen
+          # Alles ueberschreibbar ueber Repository-Variablen (Settings > Variables), nie ueber Secrets
+          NETDATA_HOST: ${{ vars.NETDATA_HOST || '192.168.2.6' }}
           OTA_HOST: ${{ vars.OTA_HOST || '192.168.2.6' }}
           OTA_PORT: ${{ vars.OTA_PORT || '8091' }}
+          OTA_AUTO: ${{ vars.OTA_AUTO || '1' }}
         run: |
           python3 - <<'PY'
           import json
           import os
-          import sys
           from pathlib import Path
 
           def c_string(value: str) -> str:
-              return json.dumps(value if value is not None else "")
-
-          missing = [k for k in ("WIFI_SSID", "WIFI_PASS", "NETDATA_HOST") if os.getenv(k) is None]
-          if missing:
-              print(f"ERROR: required secrets not set: {', '.join(missing)}", file=sys.stderr)
-              sys.exit(1)
+              return json.dumps(value)
 
           lines = [
               "#pragma once",
-              f'#define WIFI_SSID {c_string(os.getenv("WIFI_SSID"))}',
-              f'#define WIFI_PASS {c_string(os.getenv("WIFI_PASS"))}',
-              f'#define NETDATA_HOST {c_string(os.getenv("NETDATA_HOST"))}',
+              '#define WIFI_SSID ""',
+              '#define WIFI_PASS ""',
+              f'#define NETDATA_HOST {c_string(os.environ["NETDATA_HOST"])}',
               "#define NETDATA_PORT 19999",
               "#define NETDATA_TIMEOUT_MS 2500",
-              "#define NETDATA_POLL_MS 5000",
-              f'#define OTA_HOST {c_string(os.getenv("OTA_HOST"))}',
-              f'#define OTA_PORT {int(os.getenv("OTA_PORT"))}',
+              "#define NETDATA_POLL_MS 10000UL",
+              f'#define OTA_HOST {c_string(os.environ["OTA_HOST"])}',
+              f'#define OTA_PORT {int(os.environ["OTA_PORT"])}',
               '#define OTA_MANIFEST_PATH "/manifest.json"',
               "#define OTA_CHECK_MS 600000UL",
-              "#define OTA_AUTO_UPDATE_DEFAULT 0",
+              f'#define OTA_AUTO_UPDATE_DEFAULT {1 if os.environ["OTA_AUTO"] == "1" else 0}',
           ]
-          content = "\n".join(lines) + "\n"
-
           Path("include").mkdir(parents=True, exist_ok=True)
-          Path("include/config.local.h").write_text(content, encoding="utf-8")
-          print("config.local.h written successfully.")
+          Path("include/config.local.h").write_text("\n".join(lines) + "\n", encoding="utf-8")
           PY
 
       - name: Verify config.local.h
         run: |
-          echo "=== config.local.h (secrets masked) ==="
-          sed \
-            -e 's/\(WIFI_SSID\s\+\)"[^"]*"/\1"***"/' \
-            -e 's/\(WIFI_PASS\s\+\)"[^"]*"/\1"***"/' \
-            -e 's/\(NETDATA_HOST\s\+\)"[^"]*"/\1"***"/' \
-            include/config.local.h
-          echo "=== define count ==="
+          cat include/config.local.h
           test "$(grep -c '^#define' include/config.local.h)" -eq 11 || \
             { echo "ERROR: unexpected number of #define lines"; exit 1; }
-          echo "All 11 defines present."
+          grep -q '^#define WIFI_SSID ""$' include/config.local.h || \
+            { echo "ERROR: WIFI_SSID must be empty in public builds"; exit 1; }
+          grep -q '^#define WIFI_PASS ""$' include/config.local.h || \
+            { echo "ERROR: WIFI_PASS must be empty in public builds"; exit 1; }
 
       - name: Build
         run: pio run
@@ -89,6 +90,9 @@ jobs:
           test -n "$VERSION" || { echo "ERROR: FW_VERSION not found"; exit 1; }
           mkdir -p ota
           cp .pio/build/d1_mini/firmware.bin "ota/firmware-${VERSION}.bin"
+          # Die Version muss als Text in der Datei stehen; der Pi prueft das ebenfalls.
+          grep -aq "${VERSION}" "ota/firmware-${VERSION}.bin" || \
+            { echo "ERROR: version string not found in firmware"; exit 1; }
           ls -l ota
           md5sum "ota/firmware-${VERSION}.bin"
 
@@ -98,3 +102,46 @@ jobs:
           name: firmware
           path: ota/firmware-*.bin
           if-no-files-found: error
+
+  release:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: firmware
+          path: ota
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(ota/firmware-*.bin)
+          test "${#files[@]}" -eq 1 || { echo "ERROR: expected exactly one firmware file"; exit 1; }
+          NAME="$(basename "${files[0]}")"
+          VERSION="${NAME#firmware-}"
+          VERSION="${VERSION%.bin}"
+
+          (cd ota && sha256sum "$NAME" > "$NAME.sha256")
+          cat "ota/$NAME.sha256"
+
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            echo "::notice title=Kein neues Release::v${VERSION} existiert bereits. FW_VERSION in include/version.h erhoehen, damit der Pi die Firmware abholt."
+            exit 0
+          fi
+
+          gh release create "v${VERSION}" "ota/${NAME}" "ota/${NAME}.sha256" \
+            --target "${GITHUB_SHA}" \
+            --title "ESPWatcher ${VERSION}" \
+            --notes "Automatischer Build von ${GITHUB_SHA}. Enthaelt keine WLAN-Zugangsdaten; der ESP nutzt die im Flash gespeicherten. Der piholepi holt dieses Release selbst ab." \
+            --latest

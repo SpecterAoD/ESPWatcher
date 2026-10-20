@@ -7,6 +7,16 @@
 #warning "Using config.example.h. Create include/config.local.h for real deployment."
 #endif
 
+// WLAN-Zugangsdaten duerfen leer sein: Dann nutzt der ESP die im Flash gespeicherten
+// Daten (so entsteht der oeffentliche CI-Build ohne Passwort in der Firmware).
+#ifndef WIFI_SSID
+#define WIFI_SSID ""
+#endif
+
+#ifndef WIFI_PASS
+#define WIFI_PASS ""
+#endif
+
 // ---- Zielsysteme im Heimnetz -------------------------------------------
 #ifndef PIHOLEPI_HOST
 #define PIHOLEPI_HOST NETDATA_HOST

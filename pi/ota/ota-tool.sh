@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # OTA-Werkzeug fuer den piholepi. Mit Root-Rechten ausfuehren.
 #
-#   sudo ./ota-tool.sh install               einmalig: neues gen_manifest.py einsetzen (mit Sicherung)
-#   sudo ./ota-tool.sh publish <firmware.bin>   neue Firmware bereitstellen (Name: firmware-<version>.bin)
-#   sudo ./ota-tool.sh check                 Erreichbarkeit pruefen
-#   sudo ./ota-tool.sh rollback              Sicherung zurueckspielen
+#   sudo ./ota-tool.sh install     einmalig: alles einrichten (Sicherung, gen_manifest.py,
+#                                   automatische Abholung von GitHub per Timer)
+#   sudo ./ota-tool.sh pull         sofort nach neuer Firmware auf GitHub sehen (statt auf den Timer zu warten)
+#   sudo ./ota-tool.sh status       Timer, letzter Lauf, installierte Version
+#   sudo ./ota-tool.sh publish <firmware-<version>.bin>   Firmware von Hand bereitstellen
+#   sudo ./ota-tool.sh check        Erreichbarkeit des OTA-Servers pruefen
+#   sudo ./ota-tool.sh auto-off     automatische Abholung abschalten (auto-on schaltet sie wieder ein)
+#   sudo ./ota-tool.sh rollback     Sicherung zurueckspielen und Automatik abschalten
 #
-# Aendert nur Dateien unter /mnt/data/ota. nginx und systemd bleiben unberuehrt.
+# Aendert nur Dateien unter /mnt/data/ota sowie die beiden Units espwatcher-ota-pull.{service,timer}.
+# nginx und die vorhandenen esp-ota-*-Units bleiben unberuehrt.
 set -euo pipefail
 
 OTA_ROOT="${OTA_ROOT:-/mnt/data/ota}"
@@ -20,8 +25,11 @@ die() { echo "FEHLER: $*" >&2; exit 1; }
 [ -d "$FW_DIR" ] || die "$FW_DIR existiert nicht"
 
 cmd_install() {
-    [ -f "$HERE/gen_manifest.py" ] || die "gen_manifest.py liegt nicht neben diesem Skript"
-    python3 -I -m py_compile "$HERE/gen_manifest.py" || die "gen_manifest.py hat einen Syntaxfehler"
+    local f
+    for f in gen_manifest.py espwatcher-ota-pull.py espwatcher-ota-pull.service espwatcher-ota-pull.timer; do
+        [ -f "$HERE/$f" ] || die "$f liegt nicht neben diesem Skript"
+    done
+    python3 -I -m py_compile "$HERE/gen_manifest.py" "$HERE/espwatcher-ota-pull.py" || die "Syntaxfehler in den Python-Skripten"
     rm -rf "$HERE/__pycache__"
 
     local stamp backup
@@ -32,11 +40,38 @@ cmd_install() {
     echo "Sicherung: $backup"
 
     install -o root -g root -m 0755 "$HERE/gen_manifest.py" "$FW_DIR/gen_manifest.py"
+    install -o root -g root -m 0755 "$HERE/espwatcher-ota-pull.py" /usr/local/bin/espwatcher-ota-pull.py
+    install -o root -g root -m 0644 "$HERE/espwatcher-ota-pull.service" /etc/systemd/system/espwatcher-ota-pull.service
+    install -o root -g root -m 0644 "$HERE/espwatcher-ota-pull.timer" /etc/systemd/system/espwatcher-ota-pull.timer
+    systemctl daemon-reload
+
     python3 -I "$FW_DIR/gen_manifest.py"
     echo "--- manifest.json ---"
     cat "$FW_DIR/manifest.json"
-    cmd_check
+    cmd_check || true
+
+    systemctl enable --now espwatcher-ota-pull.timer
+    echo "Automatische Abholung ist eingeschaltet (alle 10 Minuten)."
+    cmd_pull
 }
+
+cmd_pull() {
+    echo "--- Suche nach neuer Firmware auf GitHub ---"
+    systemctl start espwatcher-ota-pull.service || true
+    journalctl -u espwatcher-ota-pull.service -n 15 --no-pager -o cat
+}
+
+cmd_status() {
+    systemctl list-timers espwatcher-ota-pull.timer --no-pager || true
+    echo "--- letzte Laeufe ---"
+    journalctl -u espwatcher-ota-pull.service -n 10 --no-pager -o cat
+    echo "--- auf dem Pi ---"
+    ls -1 "$FW_DIR" | grep -E '^firmware' || true
+    echo "Manifest: $(python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); print(m.get("version") or m.get("latest"))' "$FW_DIR/manifest.json" 2>/dev/null || echo unbekannt)"
+}
+
+cmd_auto_on()  { systemctl enable --now espwatcher-ota-pull.timer; echo "Automatik an."; }
+cmd_auto_off() { systemctl disable --now espwatcher-ota-pull.timer; echo "Automatik aus."; }
 
 cmd_publish() {
     local src="${1:-}"
@@ -78,18 +113,23 @@ cmd_rollback() {
     local backup
     backup="$(cat "$BACKUP_MARK")"
     [ -d "$backup" ] || die "Sicherung $backup nicht gefunden"
+    systemctl disable --now espwatcher-ota-pull.timer 2>/dev/null || true
     cp -a "$backup/firmwares/gen_manifest.py" "$FW_DIR/gen_manifest.py"
     for f in manifest.json version.txt versions.json; do
         [ -f "$backup/firmwares/$f" ] && cp -a "$backup/firmwares/$f" "$FW_DIR/$f"
         [ -f "$backup/$f" ] && cp -a "$backup/$f" "$OTA_ROOT/$f"
     done
-    echo "Alter Stand aus $backup wiederhergestellt (neue firmware-*.bin bleiben liegen)."
+    echo "Alter Stand aus $backup wiederhergestellt, Automatik ist aus. Die Units bleiben installiert (auto-on schaltet sie wieder ein)."
 }
 
 case "${1:-}" in
     install)  cmd_install ;;
+    pull)     cmd_pull ;;
+    status)   cmd_status ;;
+    auto-on)  cmd_auto_on ;;
+    auto-off) cmd_auto_off ;;
     publish)  shift; cmd_publish "${1:-}" ;;
     check)    cmd_check ;;
     rollback) cmd_rollback ;;
-    *) sed -n '2,10p' "$0"; exit 2 ;;
+    *) sed -n '2,14p' "$0"; exit 2 ;;
 esac

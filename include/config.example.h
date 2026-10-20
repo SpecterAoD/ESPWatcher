@@ -3,6 +3,8 @@
 // Kopie dieser Datei als include/config.local.h anlegen und Werte eintragen.
 // Alle Zeilen unter "optional" duerfen weggelassen werden (Standardwerte in config.h).
 
+// Beim ersten Flashen per USB eintragen. Der ESP speichert die Daten im Flash; spaetere
+// Builds (auch der oeffentliche GitHub-Build mit leeren Werten) nutzen sie weiter.
 #define WIFI_SSID "your-ssid"
 #define WIFI_PASS "your-password"
 

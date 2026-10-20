@@ -44,17 +44,19 @@ Jede LED mit 220–330 Ω Vorwiderstand gegen GND. Anderes Layout oder ohne LEDs
 
 `include/config.example.h` nach `include/config.local.h` kopieren und mindestens setzen:
 
-- `WIFI_SSID`, `WIFI_PASS`
+- `WIFI_SSID`, `WIFI_PASS` (nur für den ersten Flash per USB; im öffentlichen GitHub-Build leer)
 - `NETDATA_HOST` (piholepi, `192.168.2.6`)
 
 Alle weiteren Werte sind optional (Standardwerte in `include/config.h`), u. a. `PIZERO_HOST`, `DNS_VIP`,
 `STATUS_PORT`, `NETDATA_TEMP_CHART`, `SYSLOG_HOST`, `TIME_SERVER_HOST`, `LED_*`.
 `config.local.h` wird von git ignoriert.
 
-OTA ist nur aktiv, wenn `OTA_HOST` gesetzt ist (Manifest siehe unten). Der GitHub-Build setzt es automatisch
-(`192.168.2.6:8091`, überschreibbar über die Repository-Variablen `OTA_HOST` und `OTA_PORT`) und legt im Artifact
-`firmware` die Datei `firmware-<Version>.bin` ab. Diese Datei kommt auf dem piholepi nach `/mnt/data/ota/firmwares/`;
-das Manifest dort pflegt der vorhandene Dienst `esp-ota-manifest` (`gen_manifest.py`). Siehe `pi/ota/README.md`.
+OTA ist nur aktiv, wenn `OTA_HOST` gesetzt ist. Der GitHub-Build setzt es automatisch (`192.168.2.6:8091`) und
+schaltet Auto-OTA ein. Er baut **keine WLAN-Zugangsdaten** in die Firmware ein (das Repo ist öffentlich): `WIFI_SSID`/`WIFI_PASS`
+dürfen leer sein, dann nutzt der ESP die beim ersten Flashen im Flash gespeicherten Daten, auch nach OTA-Updates.
+
+Der ganze Weg von „Merge auf `main`" bis „ESP läuft mit der neuen Version" ist automatisiert und in `pi/ota/README.md` beschrieben.
+Dafür bei jeder Änderung `FW_VERSION` in `include/version.h` erhöhen.
 
 ## Build und Flashen
 
