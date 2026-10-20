@@ -15,8 +15,12 @@ Konfiguration ueber Umgebungsvariablen (siehe espwatcher-status.service):
   ESPW_BACKUP_MARKER  Datei, deren Aenderungszeit dem letzten erfolgreichen
                       Backup entspricht (optional, leer = nicht anzeigen)
   ESPW_SERVICES       Dienste als "name:1,name:0" (1 = kritisch), ersetzt die Liste unten
+  ESPW_ALLOW          erlaubte Netze, kommagetrennt (Standard 192.168.2.0/24,127.0.0.0/8)
+  ESPW_DNS_EVERY      Sekunden zwischen den DNS-Pruefungen (Standard 60; jede Pruefung
+                      taucht in der Pi-hole-Statistik auf, deshalb nicht zu haeufig)
 """
 
+import ipaddress
 import json
 import os
 import random
@@ -37,16 +41,28 @@ DISK_PATH = os.environ.get("ESPW_DISK_PATH", "/mnt/data")
 BACKUP_MARKER = os.environ.get("ESPW_BACKUP_MARKER", "")
 DNS_TEST_NAME = os.environ.get("ESPW_DNS_TEST_NAME", "pi-hole.net")
 REFRESH_S = 5
+DNS_EVERY_S = int(os.environ.get("ESPW_DNS_EVERY", "60"))
+DNS_PORT = int(os.environ.get("ESPW_DNS_PORT", "53"))  # nur fuer Tests aendern
+ALLOWED_NETS = [
+    ipaddress.ip_network(part.strip())
+    for part in os.environ.get("ESPW_ALLOW", "192.168.2.0/24,127.0.0.0/8").split(",")
+    if part.strip()
+]
 
 # (systemd-Dienst, kritisch?) - kritisch = ESP zeigt bei Ausfall ROT, sonst GELB.
 DEFAULT_SERVICES = [
+    # DNS-Kette: faellt einer aus, ist das Heimnetz betroffen -> ESP zeigt ROT
     ("pihole-FTL", 1),
     ("unbound", 1),
     ("dnsdist", 1),
     ("keepalived", 1),
+    # uebrige Dienste: Ausfall ist unschoen, aber nicht akut -> ESP zeigt GELB
+    ("nginx", 0),
     ("chrony", 0),
     ("netdata", 0),
     ("tailscaled", 0),
+    ("pihole-dns-policy", 0),
+    ("nft-localonly", 0),
 ]
 
 
@@ -105,7 +121,7 @@ def dns_ok(server, timeout=1.5):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(timeout)
     try:
-        sock.sendto(query, (server, 53))
+        sock.sendto(query, (server, DNS_PORT))
         data, _ = sock.recvfrom(512)
         return len(data) >= 12 and struct.unpack(">H", data[:2])[0] == qid and (data[3] & 0x0F) == 0
     except OSError:
@@ -170,11 +186,21 @@ def backup_age_hours():
         return None
 
 
+_dns_cache = {"ts": 0.0, "res": (False, False, False)}
+
+
+def dns_results():
+    """DNS-Antworten lokal / VIP / pizero, hoechstens alle DNS_EVERY_S Sekunden neu."""
+    now = time.time()
+    if _dns_cache["ts"] == 0.0 or now - _dns_cache["ts"] >= DNS_EVERY_S:
+        _dns_cache["res"] = (dns_ok(DNS_LOCAL), dns_ok(VIP), dns_ok(PIZERO))
+        _dns_cache["ts"] = now
+    return _dns_cache["res"]
+
+
 def collect():
     vip_local = vip_is_local()
-    dns_local = dns_ok(DNS_LOCAL)
-    dns_vip = dns_ok(VIP)
-    dns_pizero = dns_ok(PIZERO)
+    dns_local, dns_vip, dns_pizero = dns_results()
 
     if vip_local:
         active = "piholepi"
@@ -219,8 +245,19 @@ def updater():
         time.sleep(REFRESH_S)
 
 
+def client_allowed(address):
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return any(ip in net for net in ALLOWED_NETS)
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
+        if not client_allowed(self.client_address[0]):
+            self.send_error(403)
+            return
         if self.path.split("?")[0] not in ("/status.json", "/healthz"):
             self.send_error(404)
             return
