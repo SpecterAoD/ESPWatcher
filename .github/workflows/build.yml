@@ -82,23 +82,19 @@ jobs:
       - name: List build output
         run: find .pio -maxdepth 4 -type f | sort
 
-      - name: Create OTA bundle (firmware.bin + manifest.json)
+      - name: Name firmware for the OTA server (firmware-<version>.bin)
         run: |
           set -euo pipefail
           VERSION="$(sed -n 's/^#define FW_VERSION "\(.*\)"/\1/p' include/version.h)"
           test -n "$VERSION" || { echo "ERROR: FW_VERSION not found"; exit 1; }
           mkdir -p ota
-          cp .pio/build/d1_mini/firmware.bin ota/firmware.bin
-          MD5="$(md5sum ota/firmware.bin | cut -d' ' -f1)"
-          printf '{\n  "version": "%s",\n  "url": "/firmware.bin",\n  "md5": "%s"\n}\n' "$VERSION" "$MD5" > ota/manifest.json
-          echo "=== ota/manifest.json ==="
-          cat ota/manifest.json
+          cp .pio/build/d1_mini/firmware.bin "ota/firmware-${VERSION}.bin"
+          ls -l ota
+          md5sum "ota/firmware-${VERSION}.bin"
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: firmware
-          path: |
-            ota/firmware.bin
-            ota/manifest.json
+          path: ota/firmware-*.bin
           if-no-files-found: error

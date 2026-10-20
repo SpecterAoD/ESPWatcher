@@ -109,16 +109,27 @@ void otaLoop(AppState& state) {
     return;
   }
 
-  StaticJsonDocument<768> doc;
-  DeserializationError err = deserializeJson(doc, http.getStream());
+  // Zwei Manifest-Formate werden gelesen:
+  //  neu:      {"version","url","md5"}
+  //  piholepi: {"latest","bin","md5","versions":[...]}  (gen_manifest.py)
+  // Der Filter laesst die wachsende "versions"-Liste weg, damit der Speicher reicht.
+  StaticJsonDocument<192> filter;
+  filter["version"] = true;
+  filter["url"] = true;
+  filter["latest"] = true;
+  filter["bin"] = true;
+  filter["md5"] = true;
+
+  StaticJsonDocument<512> doc;
+  DeserializationError err = deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
   http.end();
   if (err) {
     setOtaError(state, String("Manifest parse failed: ") + err.c_str());
     return;
   }
 
-  const char* remoteVersion = doc["version"] | "";
-  const char* firmwarePath = doc["url"] | "/firmware.bin";
+  const char* remoteVersion = doc["version"] | (doc["latest"] | "");
+  const char* firmwarePath = doc["url"] | (doc["bin"] | "/firmware.bin");
   const char* md5 = doc["md5"] | "";
 
   if (strlen(remoteVersion) == 0) {
