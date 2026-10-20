@@ -54,7 +54,7 @@ Alle weiteren Werte sind optional (Standardwerte in `include/config.h`), u. a. `
 OTA ist nur aktiv, wenn `OTA_HOST` gesetzt ist (Manifest siehe unten). Der GitHub-Build setzt es automatisch
 (`192.168.2.6:8091`, überschreibbar über die Repository-Variablen `OTA_HOST` und `OTA_PORT`) und legt im Artifact
 `firmware` die Datei `firmware-<Version>.bin` ab. Diese Datei kommt auf dem piholepi nach `/mnt/data/ota/firmwares/`;
-das Manifest dort pflegt der vorhandene Dienst `esp-ota-manifest` (`gen_manifest.py`). Siehe `pi/README.md`.
+das Manifest dort pflegt der vorhandene Dienst `esp-ota-manifest` (`gen_manifest.py`). Siehe `pi/ota/README.md`.
 
 ## Build und Flashen
 
@@ -85,7 +85,7 @@ Erwartet unter `http://OTA_HOST:OTA_PORT + OTA_MANIFEST_PATH`. Die Firmware lies
 ```
 
 ```json
-{ "latest": "3.5.0", "bin": "firmware-3.5.0.bin", "md5": "0123456789abcdef0123456789abcdef", "versions": [] }
+{ "latest": "3.5.0", "bin": "firmware-3.5.0.bin", "md5": "0123456789abcdef0123456789abcdef" }
 ```
 
 Relative `url`/`bin`-Angaben werden gegen `http://OTA_HOST:OTA_PORT/` aufgelöst.
