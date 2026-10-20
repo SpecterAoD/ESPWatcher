@@ -2,7 +2,7 @@
 
 Der vorhandene Aufbau bleibt: nginx (Port 8091) liefert `/mnt/data/ota/firmwares/` aus, und
 `esp-ota-manifest.path` startet `gen_manifest.py`, sobald sich dort etwas ändert.
-Neu ist nur ein sauberes `gen_manifest.py` am selben Pfad und ein Werkzeug zum Veröffentlichen.
+Neu ist nur ein überarbeitetes `gen_manifest.py` am selben Pfad und ein Werkzeug zum Veröffentlichen.
 Geändert werden ausschließlich Dateien unter `/mnt/data/ota`; nginx und systemd bleiben unberührt.
 
 ## Einmalig einrichten
@@ -34,16 +34,18 @@ nie halb geschrieben sieht.
 
 ## Was `gen_manifest.py` schreibt
 
+Das bisherige Ausgabeformat bleibt vollständig erhalten, damit bestehende Werkzeuge (z. B. eine Versionsauswahl, die
+`versions` aus dem Manifest liest) weiter funktionieren. Neu sind nur die Felder `version` und `url`.
+
 | Datei | Inhalt |
 | ----- | ------ |
-| `manifest.json` | klein (ca. 200 Byte): `version`, `url`, `md5` sowie `latest`, `bin`, `size` |
-| `versions.json` | Liste aller Versionen mit Größe und MD5 |
+| `manifest.json` | `project`, `latest`, `bin`, `size`, `md5`, `versions[]` wie bisher, zusätzlich `version` und `url` |
+| `versions.json` | `{"project", "versions": [...]}` wie bisher |
 | `version.txt` | höchste Version |
-| `firmware.bin` | Kopie der höchsten Version |
 | `firmware-<v>.json` | Einzelinfo je Version |
 
-Liegt im Elternordner `/mnt/data/ota` bereits ein `manifest.json` oder `version.txt`, werden diese ebenfalls aktualisiert
-(der alte Aufbau lieferte sie dort über Port 8090 aus).
+`firmware.bin` und die Kopien in `/mnt/data/ota` (Port 8090) fasst das Skript wie das alte **nicht** an. Wer sie braucht,
+pflegt sie weiter von Hand.
 
 ## Hinweis zur Sicherheit
 
