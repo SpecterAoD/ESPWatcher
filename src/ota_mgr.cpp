@@ -61,7 +61,12 @@ void otaSetup(AppState& state) {
   state.otaStatus = "idle";
   state.otaUpdateAvailable = false;
   state.otaFirmwareUrl = otaBaseUrl() + "/firmware.bin";
+#if OTA_CONFIGURED
   logMessage("OTA", String("OTA configured with manifest ") + otaBaseUrl() + OTA_MANIFEST_PATH);
+#else
+  state.otaStatus = "nicht konfiguriert";
+  logMessage("OTA", "OTA not configured (OTA_HOST not set); update checks disabled");
+#endif
 }
 
 void otaSetAuto(AppState& state, bool enabled) {
@@ -74,6 +79,10 @@ bool otaAutoEnabled(const AppState& state) {
 }
 
 void otaLoop(AppState& state) {
+#if !OTA_CONFIGURED
+  (void)state;
+  return;
+#endif
   if (!state.wifiConnected || millis() - state.lastOtaCheckMs < OTA_CHECK_MS) {
     return;
   }
@@ -100,16 +109,27 @@ void otaLoop(AppState& state) {
     return;
   }
 
-  StaticJsonDocument<768> doc;
-  DeserializationError err = deserializeJson(doc, http.getStream());
+  // Zwei Manifest-Formate werden gelesen:
+  //  neu:      {"version","url","md5"}
+  //  piholepi: {"latest","bin","md5","versions":[...]}  (gen_manifest.py)
+  // Der Filter laesst die wachsende "versions"-Liste weg, damit der Speicher reicht.
+  StaticJsonDocument<192> filter;
+  filter["version"] = true;
+  filter["url"] = true;
+  filter["latest"] = true;
+  filter["bin"] = true;
+  filter["md5"] = true;
+
+  StaticJsonDocument<512> doc;
+  DeserializationError err = deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
   http.end();
   if (err) {
     setOtaError(state, String("Manifest parse failed: ") + err.c_str());
     return;
   }
 
-  const char* remoteVersion = doc["version"] | "";
-  const char* firmwarePath = doc["url"] | "/firmware.bin";
+  const char* remoteVersion = doc["version"] | (doc["latest"] | "");
+  const char* firmwarePath = doc["url"] | (doc["bin"] | "/firmware.bin");
   const char* md5 = doc["md5"] | "";
 
   if (strlen(remoteVersion) == 0) {

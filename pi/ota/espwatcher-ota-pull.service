@@ -1,0 +1,25 @@
+[Unit]
+Description=ESPWatcher: neue Firmware von GitHub holen und bereitstellen
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I /usr/local/bin/espwatcher-ota-pull.py
+RuntimeDirectory=espwatcher-ota
+TimeoutStartSec=300
+
+# Haertung: schreibt nur in den OTA-Ordner, spricht nur TCP/IP
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/mnt/data/ota
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryMax=128M
