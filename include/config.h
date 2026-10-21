@@ -73,6 +73,11 @@
 // Chart fuer die CPU-Temperatur; Name pruefen mit:
 // curl -s http://<piholepi>:19999/api/v1/charts | grep -io '"sensors[^"]*"'
 // Ohne passenden Chart nutzt die Firmware die Temperatur aus dem Status-JSON.
+// Netdata-Warnungen, deren Name diesen Text enthaelt, werden ignoriert (kritische nie). Leer = nichts ignorieren.
+#ifndef NETDATA_IGNORE_WARN
+#define NETDATA_IGNORE_WARN "tailscale0"
+#endif
+
 #ifndef NETDATA_TEMP_CHART
 #define NETDATA_TEMP_CHART "sensors.temp"
 #endif
