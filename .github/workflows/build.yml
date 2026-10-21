@@ -81,7 +81,13 @@ jobs:
             { echo "ERROR: WIFI_PASS must be empty in public builds"; exit 1; }
 
       - name: Build
-        run: pio run
+        run: |
+          set -o pipefail
+          if ! pio run 2>&1 | tee build.log; then
+            # Compiler-Fehler als Annotationen ausgeben (auch ueber die API lesbar)
+            grep -E "error:|Error " build.log | head -10 | while IFS= read -r line; do echo "::error::${line:0:400}"; done
+            exit 1
+          fi
 
       - name: List build output
         run: find .pio -maxdepth 4 -type f | sort
