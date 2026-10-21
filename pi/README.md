@@ -29,6 +29,9 @@ Der Name der WireGuard-Einheit (z. B. `wg-quick@wg0`) ist nicht vorbelegt.
   `ESPW_HOMEDASH_FILE`) und gibt die Hosts-Tabelle des Magic Mirrors (CPU, RAM, Speicher, Temperatur, Updates,
   Dienste, Unterspannung) sowie den DiskStation-Zustand (RAID, Platten, Temperaturen, Netzteil) weiter.
   Zugangsdaten stehen dort nicht und werden nicht weitergegeben.
+- **Links und Internet-Test:** Die Links im Reiter „Links“ stehen in `/etc/espwatcher/links.json`
+  (`status-tool.sh install` legt sie einmal an und überschreibt eigene Änderungen nie). Der Dienst prüft jeden Link per
+  TCP und der ESP zeigt ihn grün oder rot. Zusätzlich misst der Pi die Verbindung ins Internet (`ESPW_WAN_TARGETS`).
 - **DNS-Antwortzeit:** lokal, VIP und pizero; über 800 ms zeigt der ESP gelb.
 
 ## Installation (auf dem piholepi)

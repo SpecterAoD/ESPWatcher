@@ -44,6 +44,7 @@ const char CSS[] PROGMEM =
     "td:first-child{color:#93a1af;width:42%}"
     "a{color:#6cb2eb}svg{width:100%;height:70px;background:#1b222a;border-radius:8px}"
     ".note{color:#f1c40f}"
+    "ul.links{list-style:none;padding:0}ul.links li{padding:7px 4px;border-bottom:1px solid #2a323b}code{background:#1b222a;padding:1px 5px;border-radius:4px}"
     "</style>";
 
 String esc(const char* in) {
@@ -173,6 +174,11 @@ Cat catNet(const StatusPoint& st) {
   uint8_t meshUp = 0;
   for (uint8_t i = 0; i < d.meshCount; ++i) meshUp += d.mesh[i].connected ? 1 : 0;
   if (d.meshCount) c.text += String(c.text.length() ? " · " : "") + "Mesh " + meshUp + "/" + d.meshCount;
+  if (st.wanMs >= 0) c.text += String(c.text.length() ? " · " : "") + "Internet-Test " + st.wanMs + " ms";
+  if (st.wanMs == -1) {
+    c.text += String(c.text.length() ? " · " : "") + "Internet-Test fehlgeschlagen";
+    c.lvl = 2;
+  }
   if (wanKnown && !wanOk) c.lvl = 3;
   if (c.lvl < 3 && (d.netLevel == 3 || meshUp < d.meshCount || d.ageS > 180)) c.lvl = 2;
   return c;
@@ -296,6 +302,7 @@ void beginPage(const char* active, bool autoRefresh) {
   navLink(head, "/hosts", "Hosts", active, c.hosts.lvl);
   navLink(head, "/system", "System", active, c.sys.lvl);
   navLink(head, "/charts", "Verlauf", active, 0);
+  navLink(head, "/links", "Links", active, 0);
   navLink(head, "/esp", "ESP", active, c.esp.lvl);
   head += F("</nav><main>");
   flush(head);
@@ -432,6 +439,23 @@ void sendOverview() {
   card(b, "/esp", "ESPWatcher", c.esp);
   b += F("</div>");
   flush(b);
+
+  if (s->eventCount) {
+    b += F("<h2>Letzte Ereignisse</h2><table>");
+    for (uint8_t i = 0; i < s->eventCount; ++i) {
+      const EventEntry& e = s->events[(s->eventHead + MAX_EVENTS - 1 - i) % MAX_EVENTS];  // neueste zuerst
+      b += F("<tr><td>");
+      b += esc(e.when);
+      b += F("</td><td><i class='dot ");
+      b += lvlClass(e.level);
+      b += F("'></i>");
+      b += esc(e.text);
+      b += F("</td></tr>");
+      if (i % 5 == 4) flush(b);
+    }
+    b += F("</table><small>Statuswechsel seit dem letzten Neustart des ESP.</small>");
+    flush(b);
+  }
   endPage();
 }
 
@@ -524,6 +548,10 @@ void sendNet() {
     if (d.wanDsl.length() || d.wanOnline.length()) {
       const bool wanOk = d.wanDsl == "online" && d.wanOnline == "online";
       tile(b, wanOk ? "ok" : "bad", "Internet (DSL)", wanOk ? String(F("online")) : esc(d.wanDsl + " / " + d.wanOnline));
+    }
+    if (st.wanMs != -2) {
+      tile(b, st.wanMs >= 0 ? "ok" : "bad", "Internet vom Pi aus",
+           st.wanMs >= 0 ? String(st.wanMs) + " ms" : String(F("keine Verbindung")));
     }
     if (d.wanDown || d.wanUp) {
       // Der Router meldet die Anschlussgeschwindigkeit in kbit/s (keine aktuelle Last)
@@ -642,6 +670,48 @@ void sendSystem() {
 }
 
 // ---- ESP -----------------------------------------------------------------------
+void linkItem(String& b, const char* name, const String& url, int16_t ms) {
+  b += F("<li><i class='dot ");
+  b += ms > 0 ? "ok" : (ms == 0 ? "bad" : "");
+  b += F("'></i><a href='");
+  b += esc(url);
+  b += F("' target='_blank'>");
+  b += esc(name);
+  b += F("</a>");
+  if (ms > 0) {
+    b += F(" <small>");
+    b += String(ms);
+    b += F(" ms</small>");
+  } else if (ms == 0) {
+    b += F(" <small>nicht erreichbar</small>");
+  }
+  b += F("</li>");
+}
+
+void sendLinks() {
+  const StatusPoint& st = s->status;
+  beginPage("/links", true);
+  String b;
+  noData(b, st);
+  b += F("<h2>Dienste im Netz</h2><ul class='links'>");
+  for (uint8_t i = 0; i < st.linkCount; ++i) {
+    linkItem(b, st.links[i].name, String(st.links[i].url), st.links[i].ms);
+  }
+  b += F("</ul>");
+  if (!st.linkCount) {
+    b += F("<div class='banner note'>Keine Linkliste vom Pi. Mit <code>sudo ./status-tool.sh install</code> wird "
+           "<code>/etc/espwatcher/links.json</code> angelegt und kann dort angepasst werden.</div>");
+  }
+  flush(b);
+  b += F("<h2>Dieser ESP</h2><ul class='links'>");
+  linkItem(b, "ESPWatcher (diese Seite)", String("http://") + s->deviceIp, -1);
+  linkItem(b, "ESPWatcher-API (JSON)", String("http://") + s->deviceIp + "/api/state", -1);
+  linkItem(b, "Status-JSON vom Pi (Rohdaten)", String("http://" STATUS_HOST ":" STR(STATUS_PORT) STATUS_PATH), -1);
+  b += F("</ul>");
+  flush(b);
+  endPage();
+}
+
 void sendEsp() {
   const MetricPoint& m = s->latest;
   beginPage("/esp", false);
@@ -687,16 +757,6 @@ void sendEsp() {
   b += F("</td></tr></table>");
   flush(b);
 
-  b += F("<h2>Links</h2><ul>");
-  b += F("<li><a href='http://" NETDATA_HOST ":" STR(NETDATA_PORT) "' target='_blank'>Netdata (piholepi)</a></li>");
-  b += F("<li><a href='http://" PIHOLEPI_HOST "/admin' target='_blank'>Pi-hole piholepi</a></li>");
-  b += F("<li><a href='http://" PIZERO_HOST "/admin' target='_blank'>Pi-hole pizero</a></li>");
-  b += F("<li><a href='http://" PIHOLEPI_HOST ":8083' target='_blank'>dnsdist</a></li>");
-  b += F("<li><a href='http://" PIHOLEPI_HOST ":20211' target='_blank'>NetAlertX</a></li>");
-  b += F("<li><a href='http://" STATUS_HOST ":" STR(STATUS_PORT) STATUS_PATH "' target='_blank'>Status-JSON (Rohdaten)</a></li>");
-  b += F("<li><a href='/api/state' target='_blank'>ESPWatcher-API</a></li>");
-  b += F("</ul>");
-  flush(b);
   endPage();
 }
 
@@ -904,7 +964,7 @@ void webSetup(AppState& state) {
   server.on("/hosts", sendHosts);
   server.on("/system", sendSystem);
   server.on("/esp", sendEsp);
-  server.on("/links", sendEsp);
+  server.on("/links", sendLinks);
   server.on("/charts", handleCharts);
   server.on("/api/state", handleApiState);
   server.on("/ota", handleOtaToggle);

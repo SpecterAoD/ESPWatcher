@@ -20,6 +20,9 @@ Konfiguration ueber Umgebungsvariablen (siehe espwatcher-status.service):
                       taucht in der Pi-hole-Statistik auf, deshalb nicht zu haeufig)
   ESPW_JOBS           Sicherungs-/Wartungsauftraege (systemd-Dienst + gleichnamiger Timer),
                       kommagetrennt. Gemeldet wird: ok | late | fail | run | off | missing | unknown
+  ESPW_LINKS_FILE     Linkliste fuer die ESP-Oberflaeche (Standard /etc/espwatcher/links.json);
+                      jeder Eintrag {"n": "Name", "u": "http://host:port/pfad"} wird per TCP geprueft
+  ESPW_WAN_TARGETS    Ziele fuer den Internet-Test, "ip:port" kommagetrennt (Standard 1.1.1.1:443,9.9.9.9:443)
   ESPW_HOMEDASH_FILE  Hosts/DiskStation vom Magic Mirror (Standard /run/mirror-diag/homedash.json)
   ESPW_DIAG_FILE      Diagnose-Datei von mirror-diag (Standard /run/mirror-diag/diag.json);
                       daraus kommen Netz-, Geraete-, Mesh- und Internet-Status (optional)
@@ -49,6 +52,9 @@ REFRESH_S = 5
 DNS_EVERY_S = int(os.environ.get("ESPW_DNS_EVERY", "60"))
 DNS_PORT = int(os.environ.get("ESPW_DNS_PORT", "53"))  # nur fuer Tests aendern
 DIAG_FILE = os.environ.get("ESPW_DIAG_FILE", "/run/mirror-diag/diag.json")
+LINKS_FILE = os.environ.get("ESPW_LINKS_FILE", "/etc/espwatcher/links.json")
+LINKS_EVERY_S = 30
+WAN_TARGETS = [t for t in os.environ.get("ESPW_WAN_TARGETS", "1.1.1.1:443,9.9.9.9:443").split(",") if t]
 HOMEDASH_FILE = os.environ.get("ESPW_HOMEDASH_FILE", "/run/mirror-diag/homedash.json")
 JOBS_EVERY_S = 60
 DEFAULT_JOBS = ["rsync-pull", "restic-backup", "raspiBackup", "zero-backup", "backup-verify", "netalertx-db-backup"]
@@ -431,6 +437,63 @@ def read_homedash():
     return out
 
 
+def tcp_ms(host, port, timeout=1.5):
+    """Verbindungszeit in ms oder None."""
+    t0 = time.monotonic()
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return max(1, round((time.monotonic() - t0) * 1000))
+    except OSError:
+        return None
+
+
+def parse_link(url):
+    """(host, port) aus einer http(s)-URL, sonst None."""
+    from urllib.parse import urlsplit
+    try:
+        u = urlsplit(url)
+        if u.scheme not in ("http", "https") or not u.hostname:
+            return None
+        return u.hostname, u.port or (443 if u.scheme == "https" else 80)
+    except ValueError:
+        return None
+
+
+def read_links():
+    try:
+        with open(LINKS_FILE, "r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    out = []
+    for x in raw if isinstance(raw, list) else []:
+        if isinstance(x, dict) and parse_link(str(x.get("u", ""))):
+            out.append((str(x.get("n", "?"))[:19], str(x["u"])[:60]))
+    return out[:10]
+
+
+_links_cache = {"ts": 0.0, "data": [], "wan": None}
+
+
+def links_and_wan():
+    """Links mit Erreichbarkeit [name, url, ms (0 = nicht erreichbar)] und Internet-Zeit (ms, -1 = aus)."""
+    now = time.time()
+    if _links_cache["ts"] == 0.0 or now - _links_cache["ts"] >= LINKS_EVERY_S:
+        data = []
+        for name, url in read_links():
+            host, port = parse_link(url)
+            data.append([name, url, tcp_ms(host, port) or 0])
+        wan = -1
+        for target in WAN_TARGETS:
+            host, _, port = target.rpartition(":")
+            ms = tcp_ms(host, int(port)) if port.isdigit() else None
+            if ms is not None:
+                wan = ms
+                break
+        _links_cache.update(ts=now, data=data, wan=wan)
+    return _links_cache["data"], _links_cache["wan"]
+
+
 def collect():
     vip_local = vip_is_local()
     ms_local, ms_vip, ms_pizero = dns_latency()
@@ -459,6 +522,10 @@ def collect():
     diag = read_diag()
     if diag is not None:
         data["diag"] = diag
+    links, wan_ms = links_and_wan()
+    if links:
+        data["lk"] = links
+    data["wan_ms"] = wan_ms
     hd = read_homedash()
     if hd is not None:
         data["hd"] = hd
