@@ -68,6 +68,60 @@ struct DevEntry {
   int16_t rssi = 0;     // WLAN-Signal in dBm, 0 = kein WLAN/unbekannt
 };
 
+constexpr uint8_t MAX_HOSTS = 6;
+constexpr uint8_t MAX_NAS_DISKS = 8;
+
+// Ein Rechner aus der Mirror-Tabelle (pimirror, piholepi, pizero, kali ...). -1 = unbekannt.
+struct HostEntry {
+  char name[16] = {0};
+  bool ok = false;           // false = keine Antwort (Grund in bad)
+  float cpu = -1;            // %
+  float mem = -1;            // %
+  float disk = -1;           // % belegt
+  float freeGb = -1;
+  float temp = -1;           // °C
+  int32_t uptimeS = -1;
+  int16_t updates = -1;
+  int16_t security = -1;
+  int16_t lastUpdateH = -1;  // Stunden seit letztem Update
+  uint8_t flags = 0;         // 1 Neustart noetig, 2 Unterspannung jetzt, 4 gedrosselt, 8 Unterspannung/Drosselung seit Start
+  char bad[32] = {0};        // nicht laufende Dienste bzw. Fehlertext
+};
+
+struct NasDisk {
+  char name[10] = {0};
+  int8_t status = -1;        // Synology: 1 = normal
+  int16_t temp = -1;
+};
+
+// DiskStation per SNMP (ueber den Magic Mirror). Statuscodes: Synology, 1 = normal.
+struct NasInfo {
+  bool present = false;
+  bool online = false;
+  char name[16] = {0};
+  char err[32] = {0};
+  int8_t raid[4] = {-1, -1, -1, -1};
+  uint8_t raidCount = 0;
+  NasDisk disks[MAX_NAS_DISKS];
+  uint8_t diskCount = 0;
+  int16_t sysTemp = -1;
+  int8_t sys = -1;
+  int8_t power = -1;
+  int8_t fans[4] = {-1, -1, -1, -1};
+  uint8_t fanCount = 0;
+  float volUsedPct = -1;
+  int32_t volSizeGb = -1;
+};
+
+struct HomeInfo {
+  bool present = false;      // homedash.json auf dem Pi vorhanden und lesbar
+  char err[8] = {0};
+  uint16_t ageS = 0;
+  HostEntry hosts[MAX_HOSTS];
+  uint8_t hostCount = 0;
+  NasInfo nas;
+};
+
 // Ampelstufe aus der Diagnose: 0 unbekannt, 1 gruen, 2 gelb, 3 rot
 struct DiagInfo {
   bool present = false;   // Diagnose-Datei auf dem Pi vorhanden und lesbar
@@ -123,9 +177,12 @@ struct StatusPoint {
   JobEntry jobs[MAX_JOBS];
   uint8_t jobCount = 0;
   DiagInfo diag;
+  HomeInfo home;
 };
 
-constexpr uint8_t HISTORY_SIZE = 48;
+// 120 Werte im 30-s-Takt = 1 Stunde Verlauf (NAN = keine Messung)
+constexpr uint8_t HISTORY_SIZE = 120;
+constexpr unsigned long HISTORY_STEP_MS = 30000UL;
 
 struct RingBuffer {
   float values[HISTORY_SIZE] = {0};
@@ -139,6 +196,8 @@ struct AppState {
   RingBuffer cpuHistory;
   RingBuffer ramHistory;
   RingBuffer tempHistory;
+  RingBuffer dnsHistory;   // DNS-Antwortzeit ueber die VIP in ms
+  unsigned long lastHistoryMs = 0;
 
   HealthState systemHealth = HealthState::YELLOW;
   String healthReason = "starte...";

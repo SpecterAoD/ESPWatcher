@@ -104,5 +104,10 @@ void loop() {
     refreshHealth();
   }
 
+  if (millis() - state.lastHistoryMs >= HISTORY_STEP_MS) {
+    state.lastHistoryMs = millis();
+    telemetrySample(state);
+  }
+
   delay(5);
 }

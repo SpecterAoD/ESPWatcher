@@ -25,6 +25,10 @@ Der Name der WireGuard-Einheit (z. B. `wg-quick@wg0`) ist nicht vorbelegt.
 - **Netz und Geräte:** wenn `mirror-diag` läuft, liest der Dienst dessen `/run/mirror-diag/diag.json` (nur lesend, nur
   ausgewählte Felder: Zusammenfassungen, nicht erreichbare Geräte, Mesh-Knoten, Internet/DSL, DNS-Umschaltungen).
   Das Router-Passwort wird dafür nicht gebraucht und nie weitergegeben. Fehlt die Datei, bleibt der Bereich weg.
+- **Hosts und DiskStation:** liest zusätzlich `/run/mirror-diag/homedash.json` (nur lesend; Pfad per
+  `ESPW_HOMEDASH_FILE`) und gibt die Hosts-Tabelle des Magic Mirrors (CPU, RAM, Speicher, Temperatur, Updates,
+  Dienste, Unterspannung) sowie den DiskStation-Zustand (RAID, Platten, Temperaturen, Netzteil) weiter.
+  Zugangsdaten stehen dort nicht und werden nicht weitergegeben.
 - **DNS-Antwortzeit:** lokal, VIP und pizero; über 800 ms zeigt der ESP gelb.
 
 ## Installation (auf dem piholepi)

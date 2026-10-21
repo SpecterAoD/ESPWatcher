@@ -6,6 +6,7 @@
 
 #include "config.h"
 #include "health_eval.h"
+#include "home_eval.h"
 #include "ota_mgr.h"
 #include "status_client.h"
 
@@ -82,7 +83,7 @@ struct Cat {
 const char* lvlClass(uint8_t lvl) { return lvl == 1 ? "ok" : (lvl == 2 ? "warn" : (lvl == 3 ? "bad" : "")); }
 
 struct Cats {
-  Cat dns, svc, jobs, net, dev, sys, esp;
+  Cat dns, svc, jobs, net, dev, hosts, sys, esp;
 };
 
 uint8_t worse(uint8_t a, uint8_t b) { return a > b ? a : b; }
@@ -195,6 +196,29 @@ Cat catDev(const StatusPoint& st) {
   return c;
 }
 
+Cat catHosts(const StatusPoint& st) {
+  Cat c;
+  const HomeInfo& h = st.home;
+  if (!h.present) {
+    c.text = String(F("keine Mirror-Daten"));
+    return c;
+  }
+  c.lvl = 1;
+  uint8_t bad = 0;
+  for (uint8_t i = 0; i < h.hostCount; ++i) {
+    const uint8_t l = hostLevel(h.hosts[i], nullptr);
+    c.lvl = worse(c.lvl, l);
+    if (l == 3) bad++;
+  }
+  c.text = String(h.hostCount - bad) + "/" + h.hostCount + " Hosts in Ordnung";
+  if (h.nas.present) {
+    const uint8_t l = nasLevel(h.nas, nullptr);
+    c.lvl = worse(c.lvl, l);
+    c.text += String(" · ") + h.nas.name + (l == 1 ? " in Ordnung" : (l == 2 ? " Achtung" : " gestört"));
+  }
+  return c;
+}
+
 Cat catSys(const StatusPoint& st, const MetricPoint& m) {
   Cat c;
   c.lvl = 1;
@@ -232,6 +256,7 @@ Cats allCats() {
   c.jobs = catJobs(s->status);
   c.net = catNet(s->status);
   c.dev = catDev(s->status);
+  c.hosts = catHosts(s->status);
   c.sys = catSys(s->status, s->latest);
   c.esp = catEsp();
   return c;
@@ -268,6 +293,7 @@ void beginPage(const char* active, bool autoRefresh) {
   navLink(head, "/sicherungen", "Sicherungen", active, c.jobs.lvl);
   navLink(head, "/netz", "Netz", active, c.net.lvl);
   navLink(head, "/geraete", "Geräte", active, c.dev.lvl);
+  navLink(head, "/hosts", "Hosts", active, c.hosts.lvl);
   navLink(head, "/system", "System", active, c.sys.lvl);
   navLink(head, "/charts", "Verlauf", active, 0);
   navLink(head, "/esp", "ESP", active, c.esp.lvl);
@@ -401,6 +427,7 @@ void sendOverview() {
   card(b, "/sicherungen", "Sicherungen", c.jobs);
   card(b, "/netz", "Netz", c.net);
   card(b, "/geraete", "Geräte", c.dev);
+  card(b, "/hosts", "Hosts & DiskStation", c.hosts);
   card(b, "/system", "System piholepi", c.sys);
   card(b, "/esp", "ESPWatcher", c.esp);
   b += F("</div>");
@@ -678,7 +705,7 @@ void sparkline(String& b, const char* title, const char* unit, const RingBuffer&
   b += title;
   b += F("</h2>");
   if (buf.count < 2) {
-    b += F("<p>noch keine Daten</p>");
+    b += F("<p>noch keine Daten (mindestens zwei Messpunkte nötig, ca. 1 Minute)</p>");
     return;
   }
 
@@ -718,17 +745,119 @@ void sparkline(String& b, const char* title, const char* unit, const RingBuffer&
   b += F("</small>");
 }
 
+String uptimeText(int32_t sec) {
+  if (sec < 0) return String(F("–"));
+  if (sec < 3600) return String(sec / 60) + " min";
+  if (sec < 172800) return String(sec / 3600) + " h";
+  return String(sec / 86400) + " Tage";
+}
+
+void row(String& b, const char* label, const String& value, const char* cls = "") {
+  b += F("<tr><td>");
+  b += label;
+  b += F("</td><td class='");
+  b += cls;
+  b += F("'>");
+  b += value;
+  b += F("</td></tr>");
+}
+
+void hostBlock(String& b, const HostEntry& h) {
+  String note;
+  const uint8_t lvl = hostLevel(h, &note);
+  b += F("<h2><i class='dot ");
+  b += lvlClass(lvl);
+  b += F("'></i>");
+  b += esc(h.name);
+  b += F("</h2><table>");
+  if (!h.ok) {
+    row(b, "Zustand", esc(note), "note");
+    b += F("</table>");
+    return;
+  }
+  row(b, "CPU", fmt(h.cpu < 0 ? NAN : h.cpu, 0, " %"));
+  row(b, "RAM", fmt(h.mem < 0 ? NAN : h.mem, 0, " %"));
+  String disk = fmt(h.disk < 0 ? NAN : h.disk, 0, " %");
+  if (h.freeGb >= 0) disk += String(" · ") + String(h.freeGb, 0) + " GB frei";
+  row(b, "Speicher", disk);
+  row(b, "Temperatur", fmt(h.temp < 0 ? NAN : h.temp, 0, " °C"));
+  row(b, "läuft seit", uptimeText(h.uptimeS));
+  String upd = h.updates < 0 ? String(F("–")) : (h.updates == 0 ? String(F("aktuell")) : String(h.updates) + " offen");
+  if (h.security > 0) upd += String(" · ") + h.security + " Sicherheit";
+  row(b, "Updates", upd, h.security > 0 ? "note" : "");
+  row(b, "letztes Update", h.lastUpdateH < 0 ? String(F("–")) : hoursText(h.lastUpdateH));
+  row(b, "Zustand", note.length() ? esc(note) : String(F("in Ordnung")), lvl > 1 ? "note" : "");
+  b += F("</table>");
+}
+
+void nasBlock(String& b, const NasInfo& n) {
+  String note;
+  const uint8_t lvl = nasLevel(n, &note);
+  b += F("<h2><i class='dot ");
+  b += lvlClass(lvl);
+  b += F("'></i>");
+  b += esc(n.name);
+  b += F(" (DiskStation)</h2><table>");
+  if (!n.online) {
+    row(b, "Zustand", esc(note), "note");
+    b += F("</table>");
+    return;
+  }
+  row(b, "Zustand", note.length() ? esc(note) : String(F("in Ordnung")), lvl > 1 ? "note" : "");
+  for (uint8_t i = 0; i < n.raidCount; ++i) {
+    row(b, "RAID", raidText(n.raid[i]), n.raid[i] == 1 ? "" : "note");
+  }
+  for (uint8_t i = 0; i < n.diskCount; ++i) {
+    const NasDisk& d = n.disks[i];
+    String v = d.temp >= 0 ? String(d.temp) + " °C" : String(F("–"));
+    if (d.status >= 0 && d.status != 1) v += F(" · gestört");
+    row(b, esc(d.name).c_str(), v, d.temp >= 50 ? "note" : "");
+  }
+  row(b, "System", n.sysTemp >= 0 ? String(n.sysTemp) + " °C" : String(F("–")), n.sysTemp >= 55 ? "note" : "");
+  row(b, "Netzteil", n.power < 0 ? String(F("unbekannt")) : (n.power == 1 ? String(F("in Ordnung")) : String(F("gestört"))),
+      (n.power >= 0 && n.power != 1) ? "note" : "");
+  if (n.volUsedPct >= 0) {
+    row(b, "Volume", String(n.volUsedPct, 0) + " % von " + String(n.volSizeGb / 1000.0f, 1) + " TB");
+  }
+  b += F("</table>");
+}
+
+void sendHosts() {
+  beginPage("/hosts", true);
+  String b;
+  const HomeInfo& h = s->status.home;
+  noData(b, s->status);
+  if (!h.present) {
+    b += F("<div class='banner note'>Keine Mirror-Daten: ");
+    b += h.err[0] ? esc(h.err) : String(F("homedash.json fehlt auf dem Pi"));
+    b += F("</div>");
+  } else {
+    if (h.ageS > 300) b += F("<div class='banner note'>Mirror-Daten veraltet</div>");
+    for (uint8_t i = 0; i < h.hostCount; ++i) {
+      hostBlock(b, h.hosts[i]);
+      flush(b);
+    }
+    if (h.nas.present) nasBlock(b, h.nas);
+  }
+  flush(b);
+  endPage();
+}
+
 void handleCharts() {
   beginPage("/charts", true);
   String b;
   b += F("<p><small>Letzte ");
-  b += String(HISTORY_SIZE * NETDATA_POLL_MS / 60000UL);
-  b += F(" Minuten</small></p>");
+  b += String(HISTORY_SIZE * HISTORY_STEP_MS / 60000UL);
+  b += F(" Minuten (ein Punkt alle ");
+  b += String(HISTORY_STEP_MS / 1000UL);
+  b += F(" s, nach einem Neustart leer)</small></p>");
   sparkline(b, "CPU-Auslastung", " %", s->cpuHistory, "#6cb2eb");
   flush(b);
   sparkline(b, "RAM-Belegung", " %", s->ramHistory, "#b58df0");
   flush(b);
   sparkline(b, "CPU-Temperatur", " °C", s->tempHistory, "#f39c5a");
+  flush(b);
+  sparkline(b, "DNS-Antwortzeit (VIP)", " ms", s->dnsHistory, "#4cc9a0");
   flush(b);
   endPage();
 }
@@ -772,6 +901,7 @@ void webSetup(AppState& state) {
   server.on("/sicherungen", sendJobs);
   server.on("/netz", sendNet);
   server.on("/geraete", sendDevices);
+  server.on("/hosts", sendHosts);
   server.on("/system", sendSystem);
   server.on("/esp", sendEsp);
   server.on("/links", sendEsp);

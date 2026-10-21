@@ -10,6 +10,7 @@ import os
 import socket
 import struct
 import threading
+import time
 import types
 import unittest
 import urllib.request
@@ -230,6 +231,58 @@ class StatusTest(unittest.TestCase):
         self.assertEqual(out["fo"], [1, 3])
         self.assertLess(out["age_s"], 5)
         self.assertNotIn("geheim", json.dumps(out))  # nur ausgewaehlte Felder werden weitergegeben
+
+    # --- Hosts und DiskStation vom Magic Mirror -------------------------------------
+    def test_homedash_hosts_und_nas(self):
+        import tempfile
+        now = time.time()
+        raw = {
+            "devices": [
+                {"name": "pimirror", "ok": True, "cpu": 12.3, "temp": 51.2, "uptime": 90000,
+                 "updates": 4, "security": 1, "lastUpdate": now - 7200, "reboot": True,
+                 "mem": {"total": 1000, "used": 250}, "disk": {"total": 32e9, "used": 8e9},
+                 "services": [{"name": "magicmirror", "state": "active"}, {"name": "x", "state": "failed"}],
+                 "power": {"uvNow": False, "throttledNow": False, "hotNow": False, "uvSeen": True,
+                           "throttledSeen": False}, "token": "geheim"},
+                {"name": "kali", "ok": False, "error": "nicht erreichbar"},
+            ],
+            "nas": {"name": "DiskStation", "online": True, "raid": [{"name": "r", "status": 1}],
+                    "disks": [{"name": "Disk 1", "status": 1, "temp": 38}, {"name": "Disk 2", "status": 1, "temp": None}],
+                    "sysTemp": 47, "system": 1, "power": 2, "fans": [1, 1],
+                    "volume": {"name": "v1", "size": 4e12, "used": 1e12}},
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+            json.dump(raw, fh)
+        self.esw.HOMEDASH_FILE = fh.name
+        try:
+            out = self.esw.read_homedash()
+        finally:
+            os.unlink(fh.name)
+        h = out["hosts"][0]
+        self.assertEqual(h[:6], ["pimirror", 1, 12.3, 25.0, 25.0, 24.0])
+        self.assertEqual(h[6:10], [51.2, 90000, 4, 1])
+        self.assertEqual(h[10], 2)  # Stunden seit letztem Update
+        self.assertEqual(h[11], 1 | 8)  # Neustart noetig + Unterspannung seit Start
+        self.assertEqual(h[12], "x")
+        self.assertEqual(out["hosts"][1][:2], ["kali", 0])
+        self.assertEqual(out["hosts"][1][12], "nicht erreichbar")
+        nas = out["nas"]
+        self.assertEqual((nas["on"], nas["pwr"], nas["sys"], nas["st"]), (1, 2, 1, 47))
+        self.assertEqual(nas["disks"], [["Disk 1", 1, 38], ["Disk 2", 1, -1]])
+        self.assertEqual(nas["vol"], [25.0, 4000])
+        self.assertNotIn("geheim", json.dumps(out))
+
+    def test_homedash_fehlt_oder_kaputt(self):
+        import tempfile
+        self.esw.HOMEDASH_FILE = "/nicht/vorhanden.json"
+        self.assertIsNone(self.esw.read_homedash())
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+            fh.write("[1]")
+        self.esw.HOMEDASH_FILE = fh.name
+        try:
+            self.assertEqual(self.esw.read_homedash(), {"err": "read"})
+        finally:
+            os.unlink(fh.name)
 
     def test_diag_fehlt_oder_kaputt(self):
         import tempfile

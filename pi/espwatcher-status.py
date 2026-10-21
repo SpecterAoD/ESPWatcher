@@ -20,6 +20,7 @@ Konfiguration ueber Umgebungsvariablen (siehe espwatcher-status.service):
                       taucht in der Pi-hole-Statistik auf, deshalb nicht zu haeufig)
   ESPW_JOBS           Sicherungs-/Wartungsauftraege (systemd-Dienst + gleichnamiger Timer),
                       kommagetrennt. Gemeldet wird: ok | late | fail | run | off | missing | unknown
+  ESPW_HOMEDASH_FILE  Hosts/DiskStation vom Magic Mirror (Standard /run/mirror-diag/homedash.json)
   ESPW_DIAG_FILE      Diagnose-Datei von mirror-diag (Standard /run/mirror-diag/diag.json);
                       daraus kommen Netz-, Geraete-, Mesh- und Internet-Status (optional)
 """
@@ -48,6 +49,7 @@ REFRESH_S = 5
 DNS_EVERY_S = int(os.environ.get("ESPW_DNS_EVERY", "60"))
 DNS_PORT = int(os.environ.get("ESPW_DNS_PORT", "53"))  # nur fuer Tests aendern
 DIAG_FILE = os.environ.get("ESPW_DIAG_FILE", "/run/mirror-diag/diag.json")
+HOMEDASH_FILE = os.environ.get("ESPW_HOMEDASH_FILE", "/run/mirror-diag/homedash.json")
 JOBS_EVERY_S = 60
 DEFAULT_JOBS = ["rsync-pull", "restic-backup", "raspiBackup", "zero-backup", "backup-verify", "netalertx-db-backup"]
 JOBS = [j.strip() for j in os.environ.get("ESPW_JOBS", ",".join(DEFAULT_JOBS)).split(",") if j.strip()]
@@ -356,6 +358,79 @@ def read_diag():
     return out
 
 
+def _num(v, scale=1.0, nd=1):
+    """Zahl oder -1 (unbekannt); bool und Text zaehlen nicht."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return -1
+    return round(v * scale, nd)
+
+
+def _int(v):
+    return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else -1
+
+
+def read_homedash():
+    """Hosts-Tabelle und DiskStation aus homedash.json (Magic Mirror); None = nicht vorhanden."""
+    try:
+        age = time.time() - os.stat(HOMEDASH_FILE).st_mtime
+        with open(HOMEDASH_FILE, "r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except FileNotFoundError:
+        return None
+    except PermissionError:
+        return {"err": "perm"}
+    except (OSError, ValueError):
+        return {"err": "read"}
+    if not isinstance(raw, dict):
+        return {"err": "read"}
+
+    now = time.time()
+    hosts = []
+    for d in (raw.get("devices") or [])[:8]:
+        if not isinstance(d, dict):
+            continue
+        name = str(d.get("name", "?"))[:15]
+        if not d.get("ok"):
+            hosts.append([name, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, str(d.get("error", ""))[:30]])
+            continue
+        mem, disk = d.get("mem") or {}, d.get("disk") or {}
+        mem_pct = mem["used"] / mem["total"] * 100 if mem.get("total") else None
+        disk_pct = disk["used"] / disk["total"] * 100 if disk.get("total") else None
+        free_gb = (disk["total"] - disk["used"]) / 1e9 if disk.get("total") else None
+        last = d.get("lastUpdate")
+        last_h = (now - last) / 3600 if isinstance(last, (int, float)) and last > 0 else None
+        pw = d.get("power") or {}
+        flags = (1 if d.get("reboot") else 0) | (2 if pw.get("uvNow") else 0) \
+            | (4 if pw.get("throttledNow") or pw.get("hotNow") else 0) \
+            | (8 if pw.get("uvSeen") or pw.get("throttledSeen") else 0)
+        svc = [x for x in (d.get("services") or []) if isinstance(x, dict)]
+        bad = ",".join(str(x.get("name", "?")) for x in svc if x.get("state") != "active")[:30]
+        hosts.append([name, 1, _num(d.get("cpu")), _num(mem_pct), _num(disk_pct), _num(free_gb),
+                      _num(d.get("temp")), _int(d.get("uptime")), _int(d.get("updates")),
+                      _int(d.get("security")), _num(last_h, 1, 0), flags, bad])
+
+    out = {"age_s": round(age), "hosts": hosts}
+    nas = raw.get("nas")
+    if isinstance(nas, dict):
+        vol = nas.get("volume") or {}
+        out["nas"] = {
+            "n": str(nas.get("name", "NAS"))[:15],
+            "on": 1 if nas.get("online") and not nas.get("error") else 0,
+            "err": str(nas.get("error", ""))[:30],
+            "raid": [_int(r.get("status")) for r in (nas.get("raid") or []) if isinstance(r, dict)][:4],
+            "disks": [[str(x.get("name", "?"))[:10], _int(x.get("status")), _num(x.get("temp"), 1, 0)]
+                      for x in (nas.get("disks") or []) if isinstance(x, dict)][:8],
+            "st": _num(nas.get("sysTemp"), 1, 0),
+            "sys": _int(nas.get("system")),
+            "pwr": _int(nas.get("power")),
+            "fan": [_int(f) for f in (nas.get("fans") or [])][:4],
+        }
+        if vol.get("size"):
+            out["nas"]["vol"] = [round(_num(vol.get("used")) / vol["size"] * 100, 1) if _num(vol.get("used")) >= 0 else -1,
+                                 round(vol["size"] / 1e9)]
+    return out
+
+
 def collect():
     vip_local = vip_is_local()
     ms_local, ms_vip, ms_pizero = dns_latency()
@@ -384,6 +459,9 @@ def collect():
     diag = read_diag()
     if diag is not None:
         data["diag"] = diag
+    hd = read_homedash()
+    if hd is not None:
+        data["hd"] = hd
     temp = read_float("/sys/class/thermal/thermal_zone0/temp", 1000.0)
     if temp is not None:
         data["temp"] = round(temp, 1)

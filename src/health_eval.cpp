@@ -1,4 +1,5 @@
 #include "health_eval.h"
+#include "home_eval.h"
 
 #include "status_client.h"
 
@@ -89,6 +90,23 @@ HealthState evaluateHealth(const MetricPoint& point, const StatusPoint& status, 
         if (!d.mesh[i].connected) {
           c.add(HealthState::YELLOW, String("Mesh ") + d.mesh[i].name + " getrennt");
         }
+      }
+    }
+
+    const HomeInfo& hm = status.home;
+    if (hm.present) {
+      for (uint8_t i = 0; i < hm.hostCount; ++i) {
+        String why;
+        if (hostLevel(hm.hosts[i], &why) == 3) {
+          c.add(HealthState::YELLOW, String(hm.hosts[i].name) + ": " + why);
+        }
+      }
+      String why;
+      const uint8_t nl = nasLevel(hm.nas, &why);
+      if (nl == 3) {
+        // RAID/System betrifft die Daten, ein einzelnes Netzteil nur die Redundanz.
+        const bool dataRisk = why.indexOf("RAID") >= 0 || why.indexOf("System") >= 0 || why.indexOf("offline") >= 0;
+        c.add(dataRisk ? HealthState::RED : HealthState::YELLOW, String(hm.nas.name) + ": " + why);
       }
     }
 
