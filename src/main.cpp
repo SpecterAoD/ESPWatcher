@@ -32,6 +32,7 @@ void refreshHealth() {
                            : state.systemHealth == HealthState::YELLOW ? LogLevel::WARN
                                                                        : LogLevel::INFO;
     logMessage("HEALTH", String(healthToText(state.systemHealth)) + ": " + state.healthReason, level);
+    telemetryEvent(state, static_cast<uint8_t>(state.systemHealth) + 1, state.healthReason);
   }
 }
 

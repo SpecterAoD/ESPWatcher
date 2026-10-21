@@ -72,6 +72,10 @@ HealthState evaluateHealth(const MetricPoint& point, const StatusPoint& status, 
       }
     }
 
+    if (status.wanMs == -1) {
+      c.add(HealthState::YELLOW, "Pi erreicht das Internet nicht");
+    }
+
     const DiagInfo& d = status.diag;
     if (d.present) {
       if (d.ageS > 180) {

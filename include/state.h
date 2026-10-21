@@ -68,6 +68,23 @@ struct DevEntry {
   int16_t rssi = 0;     // WLAN-Signal in dBm, 0 = kein WLAN/unbekannt
 };
 
+constexpr uint8_t MAX_LINKS = 10;
+constexpr uint8_t MAX_EVENTS = 16;
+
+// Ein Link aus der Linkliste des Pi (wird dort per TCP geprueft).
+struct LinkEntry {
+  char name[20] = {0};
+  char url[64] = {0};
+  int16_t ms = -1;  // Verbindungszeit, 0 = nicht erreichbar, -1 = unbekannt
+};
+
+// Statuswechsel des ESP (neueste zuletzt im Ringpuffer).
+struct EventEntry {
+  char when[12] = {0};  // "MM-DD HH:MM" oder "+12 min"
+  uint8_t level = 0;    // 1 gruen, 2 gelb, 3 rot
+  char text[56] = {0};
+};
+
 constexpr uint8_t MAX_HOSTS = 6;
 constexpr uint8_t MAX_NAS_DISKS = 8;
 
@@ -178,6 +195,10 @@ struct StatusPoint {
   uint8_t jobCount = 0;
   DiagInfo diag;
   HomeInfo home;
+
+  LinkEntry links[MAX_LINKS];
+  uint8_t linkCount = 0;
+  int16_t wanMs = -2;  // Internet-Test vom Pi: ms, -1 = kein Internet, -2 = unbekannt
 };
 
 // 120 Werte im 30-s-Takt = 1 Stunde Verlauf (NAN = keine Messung)
@@ -198,6 +219,10 @@ struct AppState {
   RingBuffer tempHistory;
   RingBuffer dnsHistory;   // DNS-Antwortzeit ueber die VIP in ms
   unsigned long lastHistoryMs = 0;
+
+  EventEntry events[MAX_EVENTS];
+  uint8_t eventHead = 0;
+  uint8_t eventCount = 0;
 
   HealthState systemHealth = HealthState::YELLOW;
   String healthReason = "starte...";

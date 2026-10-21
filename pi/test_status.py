@@ -284,6 +284,39 @@ class StatusTest(unittest.TestCase):
         finally:
             os.unlink(fh.name)
 
+    # --- Linkliste und Internet-Test ------------------------------------------------
+    def test_links_geprueft_und_wan(self):
+        import tempfile
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(5)
+        port = srv.getsockname()[1]
+        dead = socket.socket()
+        dead.bind(("127.0.0.1", 0))
+        dead_port = dead.getsockname()[1]
+        dead.close()
+        links = [{"n": "Offen", "u": f"http://127.0.0.1:{port}/admin"},
+                 {"n": "Zu", "u": f"http://127.0.0.1:{dead_port}"},
+                 {"n": "Kaputt", "u": "ftp://x"}, {"n": "Ohne"}]
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+            json.dump(links, fh)
+        self.esw.LINKS_FILE = fh.name
+        self.esw.WAN_TARGETS = [f"127.0.0.1:{port}"]
+        self.esw._links_cache.update(ts=0.0, data=[], wan=None)
+        try:
+            data, wan = self.esw.links_and_wan()
+        finally:
+            os.unlink(fh.name)
+            srv.close()
+        self.assertEqual([x[0] for x in data], ["Offen", "Zu"])
+        self.assertGreater(data[0][2], 0)
+        self.assertEqual(data[1][2], 0)
+        self.assertGreater(wan, 0)
+
+    def test_links_datei_fehlt(self):
+        self.esw.LINKS_FILE = "/nicht/vorhanden.json"
+        self.assertEqual(self.esw.read_links(), [])
+
     def test_diag_fehlt_oder_kaputt(self):
         import tempfile
         self.esw.DIAG_FILE = "/nicht/vorhanden.json"

@@ -1,0 +1,10 @@
+[
+  {"n": "Netdata",       "u": "http://192.168.2.6:19999"},
+  {"n": "Pi-hole",       "u": "http://192.168.2.6/admin"},
+  {"n": "Pi-hole zero",  "u": "http://192.168.2.5/admin"},
+  {"n": "dnsdist",       "u": "http://192.168.2.6:8083"},
+  {"n": "NetAlertX",     "u": "http://192.168.2.6:20211"},
+  {"n": "DiskStation",   "u": "http://192.168.2.7:5000"},
+  {"n": "Router",        "u": "http://192.168.2.1"},
+  {"n": "ESP Pi-wachter","u": "http://192.168.2.17"}
+]

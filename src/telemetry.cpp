@@ -39,3 +39,18 @@ void telemetrySample(AppState& state) {
     telemetryPush(state.dnsHistory, static_cast<float>(st.dnsMsVip));
   }
 }
+
+void telemetryEvent(AppState& state, uint8_t level, const String& text) {
+  EventEntry& e = state.events[state.eventHead];
+  state.eventHead = (state.eventHead + 1) % MAX_EVENTS;
+  if (state.eventCount < MAX_EVENTS) state.eventCount++;
+
+  // currentTime ist "YYYY-MM-DD HH:MM:SS"; ohne NTP stattdessen die Laufzeit.
+  if (state.currentTime.length() >= 16 && state.currentTime[4] == '-') {
+    snprintf(e.when, sizeof(e.when), "%s", state.currentTime.substring(5, 16).c_str());
+  } else {
+    snprintf(e.when, sizeof(e.when), "+%lu min", millis() / 60000UL);
+  }
+  e.level = level;
+  strlcpy(e.text, text.c_str(), sizeof(e.text));
+}

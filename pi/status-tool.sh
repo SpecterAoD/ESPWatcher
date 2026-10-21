@@ -103,6 +103,12 @@ cmd_install() {
 
     install -m 0755 "$HERE/espwatcher-status.py" "$SCRIPT"
     install -m 0644 "$HERE/espwatcher-status.service" "$UNIT"
+    # Linkliste fuer die ESP-Oberflaeche: nur anlegen, eigene Aenderungen bleiben erhalten
+    install -d -m 0755 /etc/espwatcher
+    if [ ! -e /etc/espwatcher/links.json ]; then
+        install -m 0644 "$HERE/links.example.json" /etc/espwatcher/links.json
+        echo "Linkliste angelegt: /etc/espwatcher/links.json (dort anpassen)"
+    fi
     systemctl daemon-reload
     systemctl enable "$SVC" >/dev/null 2>&1
     systemctl restart "$SVC"

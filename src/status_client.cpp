@@ -256,5 +256,14 @@ bool statusPoll(StatusPoint& out) {
   }
 
   parseHome(root["hd"], out.home);
+
+  for (JsonArrayConst r : root["lk"].as<JsonArrayConst>()) {
+    if (out.linkCount >= MAX_LINKS) break;
+    LinkEntry& l = out.links[out.linkCount++];
+    strlcpy(l.name, r[0] | "?", sizeof(l.name));
+    strlcpy(l.url, r[1] | "", sizeof(l.url));
+    l.ms = static_cast<int16_t>(r[2] | -1);
+  }
+  out.wanMs = root["wan_ms"] | -2;
   return true;
 }
