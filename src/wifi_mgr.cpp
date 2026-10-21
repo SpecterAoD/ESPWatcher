@@ -112,7 +112,7 @@ void wifiSetup(AppState& state) {
   // Feste Adresse/DNS wird bewusst nicht gesetzt: DHCP vom Router genuegt, da
   // alle Ziele per IP angesprochen werden.
   disconnectHandler = WiFi.onStationModeDisconnected([](const WiFiEventStationModeDisconnected& event) {
-    lastReason = event.reason;
+    lastReason = static_cast<uint8_t>(event.reason);
     reasonPending = true;
   });
   beginWifi();
@@ -146,7 +146,9 @@ void wifiLoop(AppState& state) {
 
   if (reasonPending) {
     reasonPending = false;
-    logMessage("WIFI", String("Trennungsgrund ") + lastReason + ": " + reasonText(lastReason), LogLevel::WARN);
+    const uint8_t reason = lastReason;
+    logMessage("WIFI", String("Trennungsgrund ") + String(static_cast<unsigned>(reason)) + ": " + reasonText(reason),
+               LogLevel::WARN);
   }
 
   if (!state.wifiConnected && millis() - lastRetry > WIFI_RETRY_MS) {
