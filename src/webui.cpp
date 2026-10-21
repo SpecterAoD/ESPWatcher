@@ -288,6 +288,8 @@ void navLink(String& h, const char* href, const char* label, const char* active,
   h += F("</a>");
 }
 
+bool pageRefresh = false;
+
 void beginPage(const char* active, bool autoRefresh) {
   const Cats c = allCats();
   server.setContentLength(CONTENT_LENGTH_UNKNOWN);
@@ -296,7 +298,7 @@ void beginPage(const char* active, bool autoRefresh) {
   head += F("<!doctype html><html lang='de'><head><meta charset='utf-8'>");
   head += F("<meta name='viewport' content='width=device-width,initial-scale=1'>");
   head += F("<title>ESPWatcher</title>");
-  if (autoRefresh) head += F("<meta http-equiv='refresh' content='10'>");
+  pageRefresh = autoRefresh;
   flush(head);
   server.sendContent_P(CSS);
 
@@ -338,6 +340,10 @@ void beginPage(const char* active, bool autoRefresh) {
 }
 
 void endPage() {
+  // Neu laden alle 10 s, aber nicht, solange das Menue offen ist.
+  if (pageRefresh) {
+    server.sendContent_P(PSTR("<script>setInterval(function(){if(!document.getElementById('mn').checked)location.reload()},10000)</script>"));
+  }
   server.sendContent_P(PSTR("</main></body></html>"));
   server.sendContent("");
 }
