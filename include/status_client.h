@@ -7,3 +7,4 @@
 bool statusPoll(StatusPoint& outPoint);
 
 const char* svcStateToText(SvcState state);
+const char* jobStateToText(JobState state);

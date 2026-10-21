@@ -1,4 +1,5 @@
 #include "health_eval.h"
+#include "home_eval.h"
 
 #include "status_client.h"
 
@@ -54,6 +55,60 @@ HealthState evaluateHealth(const MetricPoint& point, const StatusPoint& status, 
     if (status.dnsLocal == 0) c.add(HealthState::RED, "DNS auf piholepi antwortet nicht");
     if (status.dnsVip == 0) c.add(HealthState::RED, "DNS-VIP antwortet nicht");
     if (status.dnsPizero == 0) c.add(HealthState::YELLOW, "DNS auf pizero antwortet nicht");
+
+    const int16_t slow = max(status.dnsMsLocal, max(status.dnsMsVip, status.dnsMsPizero));
+    if (slow > 800) {
+      c.add(HealthState::YELLOW, String("DNS antwortet langsam (") + slow + " ms)");
+    }
+
+    for (uint8_t i = 0; i < status.jobCount; ++i) {
+      const JobEntry& j = status.jobs[i];
+      if (j.state == JobState::FAIL) {
+        c.add(HealthState::YELLOW, String(j.name) + ": fehlgeschlagen");
+      } else if (j.state == JobState::LATE) {
+        c.add(HealthState::YELLOW, String(j.name) + ": überfällig (" + String(j.ageH, 0) + " h)");
+      } else if (j.state == JobState::OFF) {
+        c.add(HealthState::YELLOW, String(j.name) + ": Timer aus");
+      }
+    }
+
+    const DiagInfo& d = status.diag;
+    if (d.present) {
+      if (d.ageS > 180) {
+        c.add(HealthState::YELLOW, "Netz-Diagnose veraltet");
+      }
+      if ((d.wanDsl.length() && d.wanDsl != "online") || (d.wanOnline.length() && d.wanOnline != "online")) {
+        c.add(HealthState::RED, "Internet/DSL nicht online");
+      }
+      if (d.netLevel == 3) {
+        c.add(HealthState::YELLOW, String("Netz: ") + d.netText);
+      }
+      if (d.devLevel == 3 && d.offline.length()) {
+        c.add(HealthState::YELLOW, String("Geräte offline: ") + d.offline);
+      }
+      for (uint8_t i = 0; i < d.meshCount; ++i) {
+        if (!d.mesh[i].connected) {
+          c.add(HealthState::YELLOW, String("Mesh ") + d.mesh[i].name + " getrennt");
+        }
+      }
+    }
+
+    const HomeInfo& hm = status.home;
+    if (hm.present) {
+      for (uint8_t i = 0; i < hm.hostCount; ++i) {
+        String why;
+        if (hostLevel(hm.hosts[i], &why) == 3) {
+          c.add(HealthState::YELLOW, String(hm.hosts[i].name) + ": " + why);
+        }
+      }
+      String why;
+      const uint8_t nl = nasLevel(hm.nas, &why);
+      if (nl == 3) {
+        // RAID/System betrifft die Daten, ein einzelnes Netzteil nur die Redundanz.
+        const bool dataRisk = why.indexOf("RAID") >= 0 || why.indexOf("System") >= 0 || why.indexOf("offline") >= 0;
+        c.add(dataRisk ? HealthState::RED : HealthState::YELLOW, String(hm.nas.name) + ": " + why);
+      }
+    }
 
     if (status.diskMounted == 0) {
       c.add(HealthState::YELLOW, "Datenplatte nicht eingehängt");

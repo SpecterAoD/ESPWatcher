@@ -36,7 +36,7 @@ void refreshHealth() {
 }
 
 void pollStatus() {
-  StatusPoint point;
+  static StatusPoint point;  // nicht auf dem Stack: der ESP8266 hat nur ca. 4 KB davon
   if (statusPoll(point)) {
     state.status = point;
   } else {
@@ -102,6 +102,11 @@ void loop() {
     state.lastPollMs = millis();
     pollNetdata();
     refreshHealth();
+  }
+
+  if (millis() - state.lastHistoryMs >= HISTORY_STEP_MS) {
+    state.lastHistoryMs = millis();
+    telemetrySample(state);
   }
 
   delay(5);

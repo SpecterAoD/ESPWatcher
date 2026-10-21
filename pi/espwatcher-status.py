@@ -18,6 +18,11 @@ Konfiguration ueber Umgebungsvariablen (siehe espwatcher-status.service):
   ESPW_ALLOW          erlaubte Netze, kommagetrennt (Standard 192.168.2.0/24,127.0.0.0/8)
   ESPW_DNS_EVERY      Sekunden zwischen den DNS-Pruefungen (Standard 60; jede Pruefung
                       taucht in der Pi-hole-Statistik auf, deshalb nicht zu haeufig)
+  ESPW_JOBS           Sicherungs-/Wartungsauftraege (systemd-Dienst + gleichnamiger Timer),
+                      kommagetrennt. Gemeldet wird: ok | late | fail | run | off | missing | unknown
+  ESPW_HOMEDASH_FILE  Hosts/DiskStation vom Magic Mirror (Standard /run/mirror-diag/homedash.json)
+  ESPW_DIAG_FILE      Diagnose-Datei von mirror-diag (Standard /run/mirror-diag/diag.json);
+                      daraus kommen Netz-, Geraete-, Mesh- und Internet-Status (optional)
 """
 
 import ipaddress
@@ -43,6 +48,11 @@ DNS_TEST_NAME = os.environ.get("ESPW_DNS_TEST_NAME", "pi-hole.net")
 REFRESH_S = 5
 DNS_EVERY_S = int(os.environ.get("ESPW_DNS_EVERY", "60"))
 DNS_PORT = int(os.environ.get("ESPW_DNS_PORT", "53"))  # nur fuer Tests aendern
+DIAG_FILE = os.environ.get("ESPW_DIAG_FILE", "/run/mirror-diag/diag.json")
+HOMEDASH_FILE = os.environ.get("ESPW_HOMEDASH_FILE", "/run/mirror-diag/homedash.json")
+JOBS_EVERY_S = 60
+DEFAULT_JOBS = ["rsync-pull", "restic-backup", "raspiBackup", "zero-backup", "backup-verify", "netalertx-db-backup"]
+JOBS = [j.strip() for j in os.environ.get("ESPW_JOBS", ",".join(DEFAULT_JOBS)).split(",") if j.strip()]
 ALLOWED_NETS = [
     ipaddress.ip_network(part.strip())
     for part in os.environ.get("ESPW_ALLOW", "192.168.2.0/24,127.0.0.0/8").split(",")
@@ -111,8 +121,8 @@ def vip_is_local():
     return f" {VIP}/" in out
 
 
-def dns_ok(server, timeout=1.5):
-    """Einfache A-Abfrage per UDP; True, wenn eine gueltige Antwort (NOERROR) kommt."""
+def dns_query(server, timeout=1.5):
+    """Einfache A-Abfrage per UDP; Antwortzeit in ms bei gueltiger Antwort (NOERROR), sonst None."""
     qid = random.randrange(65536)
     query = struct.pack(">HHHHHH", qid, 0x0100, 1, 0, 0, 0)
     for part in DNS_TEST_NAME.split("."):
@@ -120,14 +130,20 @@ def dns_ok(server, timeout=1.5):
     query += b"\x00" + struct.pack(">HH", 1, 1)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(timeout)
+    started = time.monotonic()
     try:
         sock.sendto(query, (server, DNS_PORT))
         data, _ = sock.recvfrom(512)
-        return len(data) >= 12 and struct.unpack(">H", data[:2])[0] == qid and (data[3] & 0x0F) == 0
+        good = len(data) >= 12 and struct.unpack(">H", data[:2])[0] == qid and (data[3] & 0x0F) == 0
+        return max(1, round((time.monotonic() - started) * 1000)) if good else None
     except OSError:
-        return False
+        return None
     finally:
         sock.close()
+
+
+def dns_ok(server, timeout=1.5):
+    return dns_query(server, timeout) is not None
 
 
 def read_float(path, scale=1.0):
@@ -186,21 +202,239 @@ def backup_age_hours():
         return None
 
 
-_dns_cache = {"ts": 0.0, "res": (False, False, False)}
+_dns_cache = {"ts": 0.0, "ms": (None, None, None)}
+
+
+def dns_latency():
+    """Antwortzeiten (ms oder None) lokal / VIP / pizero, hoechstens alle DNS_EVERY_S Sekunden neu."""
+    now = time.time()
+    if _dns_cache["ts"] == 0.0 or now - _dns_cache["ts"] >= DNS_EVERY_S:
+        _dns_cache["ms"] = (dns_query(DNS_LOCAL), dns_query(VIP), dns_query(PIZERO))
+        _dns_cache["ts"] = now
+    return _dns_cache["ms"]
 
 
 def dns_results():
-    """DNS-Antworten lokal / VIP / pizero, hoechstens alle DNS_EVERY_S Sekunden neu."""
+    """DNS-Antworten lokal / VIP / pizero als True/False."""
+    return tuple(ms is not None for ms in dns_latency())
+
+
+# ---- Sicherungen und Wartungsauftraege (systemd) ---------------------------------
+def unix_ts(value):
+    text = (value or "").strip().lstrip("@")
+    try:
+        number = int(text)
+    except ValueError:
+        return None
+    return number if number > 0 else None
+
+
+def unit_props(unit, props):
+    try:
+        out = subprocess.run(
+            ["systemctl", "show", "--timestamp=unix"] + [f"-p{p}" for p in props] + [unit],
+            capture_output=True, text=True, timeout=3, check=False,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+
+
+def timer_times():
+    """{Timer-Unit: (letzter Start, naechster Start)} in Sekunden, aus `systemctl list-timers` (JSON)."""
+    try:
+        out = subprocess.run(
+            ["systemctl", "list-timers", "--all", "--no-pager", "--output=json"],
+            capture_output=True, text=True, timeout=5, check=False,
+        ).stdout
+        entries = json.loads(out)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return {}
+    result = {}
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict) or "unit" not in entry:
+            continue
+        last, nxt = entry.get("last") or 0, entry.get("next") or 0  # Mikrosekunden seit 1970
+        result[entry["unit"]] = (last / 1e6 if last > 0 else None, nxt / 1e6 if nxt > 0 else None)
+    return result
+
+
+def job_state(name, now=None, times=None):
+    """ok | late (ueberfaellig) | fail | run | off (Timer aus) | missing | unknown, dazu Alter in Stunden."""
+    now = now or time.time()
+    svc = unit_props(name + ".service", ["LoadState", "ActiveState", "Result", "ExecMainExitTimestamp"])
+    if svc is None:
+        return {"n": name, "s": "unknown"}
+    if svc.get("LoadState") == "not-found":
+        return {"n": name, "s": "missing"}
+    if svc.get("ActiveState") in ("activating", "reloading"):
+        return {"n": name, "s": "run"}
+
+    times = timer_times() if times is None else times
+    trig, nxt = times.get(name + ".timer", (None, None))
+    last = unix_ts(svc.get("ExecMainExitTimestamp"))
+    entry = {"n": name}
+    if not last:
+        # systemd vergisst Laufzeiten beim Neustart; Timer mit Persistent=true merken den letzten Start
+        last = trig
+    if last:
+        entry["a"] = round((now - last) / 3600.0, 1)
+    if svc.get("Result", "success") not in ("", "success"):
+        entry["s"] = "fail"
+        return entry
+    if not last:
+        entry["s"] = "unknown"
+        return entry
+
+    timer = unit_props(name + ".timer", ["LoadState", "ActiveState"]) or {}
+    if timer.get("LoadState") == "loaded" and timer.get("ActiveState") != "active":
+        entry["s"] = "off"
+        return entry
+    period = nxt - trig if trig and nxt and nxt > trig else None
+    limit = max(2 * period, period + 7200) if period else 36 * 3600
+    entry["s"] = "late" if now - last > limit else "ok"
+    return entry
+
+
+_jobs_cache = {"ts": 0.0, "data": []}
+
+
+def jobs_results():
     now = time.time()
-    if _dns_cache["ts"] == 0.0 or now - _dns_cache["ts"] >= DNS_EVERY_S:
-        _dns_cache["res"] = (dns_ok(DNS_LOCAL), dns_ok(VIP), dns_ok(PIZERO))
-        _dns_cache["ts"] = now
-    return _dns_cache["res"]
+    if _jobs_cache["ts"] == 0.0 or now - _jobs_cache["ts"] >= JOBS_EVERY_S:
+        times = timer_times()
+        _jobs_cache["data"] = [job_state(name, times=times) for name in JOBS]
+        _jobs_cache["ts"] = now
+    return _jobs_cache["data"]
+
+
+# ---- Netz-/Geraete-Diagnose von mirror-diag (optional) -----------------------------
+def short(name):
+    return str(name).replace("infra-", "")[:20]
+
+
+def read_diag():
+    """Kompakte Zusammenfassung aus diag.json; None = nicht vorhanden, {"err": ..} = nicht lesbar."""
+    try:
+        age = time.time() - os.stat(DIAG_FILE).st_mtime
+        with open(DIAG_FILE, "r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except FileNotFoundError:
+        return None
+    except PermissionError:
+        return {"err": "perm"}
+    except (OSError, ValueError):
+        return {"err": "read"}
+    if not isinstance(raw, dict):
+        return {"err": "read"}
+
+    def summ(key):
+        item = (raw.get("summary") or {}).get(key) or {}
+        return {"s": str(item.get("state", "grau"))[:6], "t": str(item.get("text", ""))[:60]}
+
+    d3, d4, d5 = (raw.get("d3") or {}), (raw.get("d4") or {}), (raw.get("d5") or {})
+    out = {"age_s": round(age), "dns": summ("dns"), "net": summ("netz"), "dev": summ("geraete")}
+    devices = [x for x in (d5.get("devices") or []) if isinstance(x, dict)]
+    out["off"] = [short(x.get("name", "?")) for x in devices if x.get("state") == "rot"][:6]
+    code = {"gruen": 1, "gelb": 2, "rot": 3}
+    out["devs"] = [
+        [str(x.get("name", "?"))[:21], code.get(x.get("state"), 0), 1 if x.get("online") else 0,
+         round(x["ms"]) if isinstance(x.get("ms"), (int, float)) else -1,
+         int((x.get("mesh") or {}).get("rssi") or 0)]
+        for x in devices
+    ][:30]
+    out["warn"] = [short(x.get("name", "?")) for x in devices if x.get("state") == "gelb"][:6]
+    out["n_dev"] = [sum(1 for x in devices if x.get("online")), len(devices)]
+    dsl = d4.get("dsl") or {}
+    out["wan"] = {k: dsl.get(src) for k, src in
+                  (("dsl", "dsl"), ("on", "online"), ("down", "inetDown"), ("up", "inetUp"),
+                   ("sync_d", "syncDown"), ("sync_u", "syncUp")) if dsl.get(src) is not None}
+    nodes = ((d4.get("mesh") or {}).get("nodes") or [])
+    out["mesh"] = [{"n": short(n.get("name", n.get("ip", "?"))), "c": 1 if n.get("connected") else 0}
+                   for n in nodes if isinstance(n, dict)][:6]
+    fo = d3.get("failovers") or {}
+    if isinstance(fo, dict) and "h24" in fo:
+        out["fo"] = [fo.get("h24", 0), fo.get("d7", 0)]
+    return out
+
+
+def _num(v, scale=1.0, nd=1):
+    """Zahl oder -1 (unbekannt); bool und Text zaehlen nicht."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return -1
+    return round(v * scale, nd)
+
+
+def _int(v):
+    return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else -1
+
+
+def read_homedash():
+    """Hosts-Tabelle und DiskStation aus homedash.json (Magic Mirror); None = nicht vorhanden."""
+    try:
+        age = time.time() - os.stat(HOMEDASH_FILE).st_mtime
+        with open(HOMEDASH_FILE, "r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except FileNotFoundError:
+        return None
+    except PermissionError:
+        return {"err": "perm"}
+    except (OSError, ValueError):
+        return {"err": "read"}
+    if not isinstance(raw, dict):
+        return {"err": "read"}
+
+    now = time.time()
+    hosts = []
+    for d in (raw.get("devices") or [])[:8]:
+        if not isinstance(d, dict):
+            continue
+        name = str(d.get("name", "?"))[:15]
+        if not d.get("ok"):
+            hosts.append([name, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, str(d.get("error", ""))[:30]])
+            continue
+        mem, disk = d.get("mem") or {}, d.get("disk") or {}
+        mem_pct = mem["used"] / mem["total"] * 100 if mem.get("total") else None
+        disk_pct = disk["used"] / disk["total"] * 100 if disk.get("total") else None
+        free_gb = (disk["total"] - disk["used"]) / 1e9 if disk.get("total") else None
+        last = d.get("lastUpdate")
+        last_h = (now - last) / 3600 if isinstance(last, (int, float)) and last > 0 else None
+        pw = d.get("power") or {}
+        flags = (1 if d.get("reboot") else 0) | (2 if pw.get("uvNow") else 0) \
+            | (4 if pw.get("throttledNow") or pw.get("hotNow") else 0) \
+            | (8 if pw.get("uvSeen") or pw.get("throttledSeen") else 0)
+        svc = [x for x in (d.get("services") or []) if isinstance(x, dict)]
+        bad = ",".join(str(x.get("name", "?")) for x in svc if x.get("state") != "active")[:30]
+        hosts.append([name, 1, _num(d.get("cpu")), _num(mem_pct), _num(disk_pct), _num(free_gb),
+                      _num(d.get("temp")), _int(d.get("uptime")), _int(d.get("updates")),
+                      _int(d.get("security")), _num(last_h, 1, 0), flags, bad])
+
+    out = {"age_s": round(age), "hosts": hosts}
+    nas = raw.get("nas")
+    if isinstance(nas, dict):
+        vol = nas.get("volume") or {}
+        out["nas"] = {
+            "n": str(nas.get("name", "NAS"))[:15],
+            "on": 1 if nas.get("online") and not nas.get("error") else 0,
+            "err": str(nas.get("error", ""))[:30],
+            "raid": [_int(r.get("status")) for r in (nas.get("raid") or []) if isinstance(r, dict)][:4],
+            "disks": [[str(x.get("name", "?"))[:10], _int(x.get("status")), _num(x.get("temp"), 1, 0)]
+                      for x in (nas.get("disks") or []) if isinstance(x, dict)][:8],
+            "st": _num(nas.get("sysTemp"), 1, 0),
+            "sys": _int(nas.get("system")),
+            "pwr": _int(nas.get("power")),
+            "fan": [_int(f) for f in (nas.get("fans") or [])][:4],
+        }
+        if vol.get("size"):
+            out["nas"]["vol"] = [round(_num(vol.get("used")) / vol["size"] * 100, 1) if _num(vol.get("used")) >= 0 else -1,
+                                 round(vol["size"] / 1e9)]
+    return out
 
 
 def collect():
     vip_local = vip_is_local()
-    dns_local, dns_vip, dns_pizero = dns_results()
+    ms_local, ms_vip, ms_pizero = dns_latency()
+    dns_local, dns_vip, dns_pizero = (ms is not None for ms in (ms_local, ms_vip, ms_pizero))
 
     if vip_local:
         active = "piholepi"
@@ -217,6 +451,17 @@ def collect():
         "svc": [{"n": n, "s": service_state(n), "c": c} for n, c in SERVICES],
         "disk": disk_info(),
     }
+    ms = {k: v for k, v in (("local", ms_local), ("vip", ms_vip), ("pizero", ms_pizero)) if v is not None}
+    if ms:
+        data["dns_ms"] = ms
+    if JOBS:
+        data["jobs"] = jobs_results()
+    diag = read_diag()
+    if diag is not None:
+        data["diag"] = diag
+    hd = read_homedash()
+    if hd is not None:
+        data["hd"] = hd
     temp = read_float("/sys/class/thermal/thermal_zone0/temp", 1000.0)
     if temp is not None:
         data["temp"] = round(temp, 1)
