@@ -238,7 +238,26 @@ def unit_props(unit, props):
     return dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
 
 
-def job_state(name, now=None):
+def timer_times():
+    """{Timer-Unit: (letzter Start, naechster Start)} in Sekunden, aus `systemctl list-timers` (JSON)."""
+    try:
+        out = subprocess.run(
+            ["systemctl", "list-timers", "--all", "--no-pager", "--output=json"],
+            capture_output=True, text=True, timeout=5, check=False,
+        ).stdout
+        entries = json.loads(out)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return {}
+    result = {}
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict) or "unit" not in entry:
+            continue
+        last, nxt = entry.get("last") or 0, entry.get("next") or 0  # Mikrosekunden seit 1970
+        result[entry["unit"]] = (last / 1e6 if last > 0 else None, nxt / 1e6 if nxt > 0 else None)
+    return result
+
+
+def job_state(name, now=None, times=None):
     """ok | late (ueberfaellig) | fail | run | off (Timer aus) | missing | unknown, dazu Alter in Stunden."""
     now = now or time.time()
     svc = unit_props(name + ".service", ["LoadState", "ActiveState", "Result", "ExecMainExitTimestamp"])
@@ -249,12 +268,13 @@ def job_state(name, now=None):
     if svc.get("ActiveState") in ("activating", "reloading"):
         return {"n": name, "s": "run"}
 
+    times = timer_times() if times is None else times
+    trig, nxt = times.get(name + ".timer", (None, None))
     last = unix_ts(svc.get("ExecMainExitTimestamp"))
     entry = {"n": name}
-    timer = unit_props(name + ".timer", ["LoadState", "ActiveState", "LastTriggerUSec", "NextElapseUSecRealtime"]) or {}
     if not last:
         # systemd vergisst Laufzeiten beim Neustart; Timer mit Persistent=true merken den letzten Start
-        last = unix_ts(timer.get("LastTriggerUSec"))
+        last = trig
     if last:
         entry["a"] = round((now - last) / 3600.0, 1)
     if svc.get("Result", "success") not in ("", "success"):
@@ -264,15 +284,11 @@ def job_state(name, now=None):
         entry["s"] = "unknown"
         return entry
 
-    has_timer = timer.get("LoadState") == "loaded"
-    if has_timer and timer.get("ActiveState") != "active":
+    timer = unit_props(name + ".timer", ["LoadState", "ActiveState"]) or {}
+    if timer.get("LoadState") == "loaded" and timer.get("ActiveState") != "active":
         entry["s"] = "off"
         return entry
-    period = None
-    if has_timer:
-        trig, nxt = unix_ts(timer.get("LastTriggerUSec")), unix_ts(timer.get("NextElapseUSecRealtime"))
-        if trig and nxt and nxt > trig:
-            period = nxt - trig
+    period = nxt - trig if trig and nxt and nxt > trig else None
     limit = max(2 * period, period + 7200) if period else 36 * 3600
     entry["s"] = "late" if now - last > limit else "ok"
     return entry
@@ -284,7 +300,8 @@ _jobs_cache = {"ts": 0.0, "data": []}
 def jobs_results():
     now = time.time()
     if _jobs_cache["ts"] == 0.0 or now - _jobs_cache["ts"] >= JOBS_EVERY_S:
-        _jobs_cache["data"] = [job_state(name) for name in JOBS]
+        times = timer_times()
+        _jobs_cache["data"] = [job_state(name, times=times) for name in JOBS]
         _jobs_cache["ts"] = now
     return _jobs_cache["data"]
 

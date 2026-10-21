@@ -151,12 +151,17 @@ class StatusTest(unittest.TestCase):
         self.assertFalse(self.esw.client_allowed("kein-ip"))
 
     # --- Sicherungen -----------------------------------------------------------
-    def job(self, svc, timer, now=1_000_000):
-        self.esw.subprocess.run = self.fake_run({"j.service": svc, "j.timer": timer})
+    @staticmethod
+    def timers(last=913_600, nxt=1_000_000):
+        """list-timers (JSON): Zeiten in Mikrosekunden; Periode = nxt - last (Standard 86400 s)."""
+        return json.dumps([{"unit": "j.timer", "activates": "j.service", "last": last * 10**6, "next": nxt * 10**6}])
+
+    def job(self, svc, timer="LoadState=loaded\nActiveState=active\n", times=None, now=1_000_000):
+        self.esw.subprocess.run = self.fake_run(
+            {"j.service": svc, "j.timer": timer, "--output=json": self.timers() if times is None else times})
         return self.esw.job_state("j", now=now)
 
-    TIMER_DAILY = ("LoadState=loaded\nActiveState=active\nLastTriggerUSec=@913600\n"
-                   "NextElapseUSecRealtime=@1000000\n")  # Periode 86400 s
+    TIMER_DAILY = "LoadState=loaded\nActiveState=active\n"
 
     def test_job_ok(self):
         svc = "LoadState=loaded\nActiveState=inactive\nResult=success\nExecMainExitTimestamp=@990000\n"
@@ -171,12 +176,18 @@ class StatusTest(unittest.TestCase):
         self.assertEqual(self.job(base % "exit-code", self.TIMER_DAILY)["s"], "fail")
         self.assertEqual(self.job("LoadState=loaded\nActiveState=activating\nResult=success\n", self.TIMER_DAILY)["s"], "run")
         self.assertEqual(self.job("LoadState=not-found\nActiveState=inactive\n", "")["s"], "missing")
-        off = "LoadState=loaded\nActiveState=inactive\nLastTriggerUSec=@1\nNextElapseUSecRealtime=\n"
+        off = "LoadState=loaded\nActiveState=inactive\n"
         self.assertEqual(self.job(base % "success", off)["s"], "off")
 
     def test_job_ohne_timer_nutzt_36_stunden(self):
         old = "LoadState=loaded\nActiveState=inactive\nResult=success\nExecMainExitTimestamp=@%d\n" % (1_000_000 - 40 * 3600)
-        self.assertEqual(self.job(old, "LoadState=not-found\n")["s"], "late")
+        self.assertEqual(self.job(old, "LoadState=not-found\n", times="[]")["s"], "late")
+
+    def test_job_woechentlich_ist_nach_3_tagen_nicht_ueberfaellig(self):
+        week = 7 * 86400
+        svc = "LoadState=loaded\nActiveState=inactive\nResult=success\nExecMainExitTimestamp=@%d\n" % (1_000_000 - 3 * 86400)
+        times = self.timers(last=1_000_000 - 3 * 86400, nxt=1_000_000 - 3 * 86400 + week)
+        self.assertEqual(self.job(svc, times=times)["s"], "ok")
 
     def test_job_nach_neustart_nutzt_timerzeitpunkt(self):
         svc = "LoadState=loaded\nActiveState=inactive\nResult=success\nExecMainExitTimestamp=\n"
@@ -184,8 +195,7 @@ class StatusTest(unittest.TestCase):
 
     def test_job_ganz_ohne_zeitpunkt_ist_unbekannt(self):
         svc = "LoadState=loaded\nActiveState=inactive\nResult=success\nExecMainExitTimestamp=\n"
-        timer = "LoadState=loaded\nActiveState=active\nLastTriggerUSec=\nNextElapseUSecRealtime=@1000000\n"
-        self.assertEqual(self.job(svc, timer)["s"], "unknown")
+        self.assertEqual(self.job(svc, times="[]")["s"], "unknown")
 
     # --- Diagnose von mirror-diag -------------------------------------------------
     def test_diag_zusammenfassung(self):
