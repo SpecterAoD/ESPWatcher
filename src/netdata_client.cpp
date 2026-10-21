@@ -150,6 +150,10 @@ bool netdataPoll(MetricPoint& outPoint) {
       if (strcmp(status, "CRITICAL") == 0) {
         outPoint.criticalAlerts++;
       } else if (strcmp(status, "WARNING") == 0) {
+        // Warnungen der VPN-Schnittstelle (z. B. verworfene Pakete) sind kein Fehler des Pi.
+        if (strlen(NETDATA_IGNORE_WARN) > 0 && strstr(kv.key().c_str(), NETDATA_IGNORE_WARN) != nullptr) {
+          continue;
+        }
         outPoint.warningAlerts++;
       }
     }
