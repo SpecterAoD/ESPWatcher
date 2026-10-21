@@ -150,6 +150,81 @@ class StatusTest(unittest.TestCase):
         self.assertFalse(self.esw.client_allowed("8.8.8.8"))
         self.assertFalse(self.esw.client_allowed("kein-ip"))
 
+    # --- Sicherungen -----------------------------------------------------------
+    def job(self, svc, timer, now=1_000_000):
+        self.esw.subprocess.run = self.fake_run({"j.service": svc, "j.timer": timer})
+        return self.esw.job_state("j", now=now)
+
+    TIMER_DAILY = ("LoadState=loaded\nActiveState=active\nLastTriggerUSec=@913600\n"
+                   "NextElapseUSecRealtime=@1000000\n")  # Periode 86400 s
+
+    def test_job_ok(self):
+        svc = "LoadState=loaded\nActiveState=inactive\nResult=success\nExecMainExitTimestamp=@990000\n"
+        self.assertEqual(self.job(svc, self.TIMER_DAILY), {"n": "j", "s": "ok", "a": 2.8})
+
+    def test_job_ueberfaellig_nach_zwei_perioden(self):
+        svc = "LoadState=loaded\nActiveState=inactive\nResult=success\nExecMainExitTimestamp=@%d\n" % (1_000_000 - 3 * 86400)
+        self.assertEqual(self.job(svc, self.TIMER_DAILY)["s"], "late")
+
+    def test_job_fehler_laeuft_fehlt_timer_aus(self):
+        base = "LoadState=loaded\nActiveState=inactive\nResult=%s\nExecMainExitTimestamp=@990000\n"
+        self.assertEqual(self.job(base % "exit-code", self.TIMER_DAILY)["s"], "fail")
+        self.assertEqual(self.job("LoadState=loaded\nActiveState=activating\nResult=success\n", self.TIMER_DAILY)["s"], "run")
+        self.assertEqual(self.job("LoadState=not-found\nActiveState=inactive\n", "")["s"], "missing")
+        off = "LoadState=loaded\nActiveState=inactive\nLastTriggerUSec=@1\nNextElapseUSecRealtime=\n"
+        self.assertEqual(self.job(base % "success", off)["s"], "off")
+
+    def test_job_ohne_timer_nutzt_36_stunden(self):
+        old = "LoadState=loaded\nActiveState=inactive\nResult=success\nExecMainExitTimestamp=@%d\n" % (1_000_000 - 40 * 3600)
+        self.assertEqual(self.job(old, "LoadState=not-found\n")["s"], "late")
+
+    def test_job_nie_gelaufen_ist_unbekannt(self):
+        svc = "LoadState=loaded\nActiveState=inactive\nResult=success\nExecMainExitTimestamp=\n"
+        self.assertEqual(self.job(svc, self.TIMER_DAILY)["s"], "unknown")
+
+    # --- Diagnose von mirror-diag -------------------------------------------------
+    def test_diag_zusammenfassung(self):
+        import tempfile
+        raw = {
+            "summary": {"dns": {"state": "gruen", "text": "VIP bei piholepi"},
+                        "netz": {"state": "gelb", "text": "mesh-sz: 40 ms"},
+                        "geraete": {"state": "rot", "text": "nicht erreichbar: kalipi"}},
+            "d3": {"failovers": {"h24": 1, "d7": 3}},
+            "d4": {"dsl": {"dsl": "online", "online": "online", "inetDown": 120000, "inetUp": 40000,
+                           "firmware": "geheim?", "since": "x"},
+                   "mesh": {"nodes": [{"name": "infra-mesh-wz", "connected": True, "mac": "aa"},
+                                      {"name": "infra-mesh-sz", "connected": False}]}},
+            "d5": {"devices": [{"name": "infra-diskstation", "state": "gruen", "online": True},
+                               {"name": "kalipi", "state": "rot", "online": False}]},
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+            json.dump(raw, fh)
+        self.esw.DIAG_FILE = fh.name
+        try:
+            out = self.esw.read_diag()
+        finally:
+            os.unlink(fh.name)
+        self.assertEqual(out["net"], {"s": "gelb", "t": "mesh-sz: 40 ms"})
+        self.assertEqual(out["off"], ["kalipi"])
+        self.assertEqual(out["n_dev"], [1, 2])
+        self.assertEqual(out["wan"], {"dsl": "online", "on": "online", "down": 120000, "up": 40000})
+        self.assertEqual(out["mesh"], [{"n": "mesh-wz", "c": 1}, {"n": "mesh-sz", "c": 0}])
+        self.assertEqual(out["fo"], [1, 3])
+        self.assertLess(out["age_s"], 5)
+        self.assertNotIn("geheim", json.dumps(out))  # nur ausgewaehlte Felder werden weitergegeben
+
+    def test_diag_fehlt_oder_kaputt(self):
+        import tempfile
+        self.esw.DIAG_FILE = "/nicht/vorhanden.json"
+        self.assertIsNone(self.esw.read_diag())
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+            fh.write("{kaputt")
+        self.esw.DIAG_FILE = fh.name
+        try:
+            self.assertEqual(self.esw.read_diag(), {"err": "read"})
+        finally:
+            os.unlink(fh.name)
+
     # --- Gesamtausgabe ---------------------------------------------------------
     def test_ausgabe_passt_zur_firmware(self):
         dns = FakeDns(rcode=0)
@@ -164,6 +239,7 @@ class StatusTest(unittest.TestCase):
             }
         )
         self.esw.SERVICES = [("pihole-FTL", 1), ("unbound", 1)]
+        self.esw.DIAG_FILE = "/nicht/vorhanden.json"
         try:
             data = self.esw.collect()
         finally:
@@ -173,6 +249,8 @@ class StatusTest(unittest.TestCase):
         self.assertEqual(data["svc"], [{"n": "pihole-FTL", "s": "active", "c": 1},
                                        {"n": "unbound", "s": "failed", "c": 1}])
         self.assertEqual(data["thr"], 0)
+        self.assertEqual(set(data["dns_ms"]), {"local", "vip", "pizero"})
+        self.assertEqual(len(data["jobs"]), len(self.esw.JOBS))
         self.assertIn("mounted", data["disk"])
         json.dumps(data)  # muss serialisierbar sein
 

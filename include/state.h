@@ -42,6 +42,45 @@ struct ServiceEntry {
   bool critical = false;
 };
 
+// Sicherungs-/Wartungsauftraege (systemd-Timer auf dem Pi)
+enum class JobState : uint8_t { UNKNOWN = 0, OK = 1, LATE = 2, FAIL = 3, RUN = 4, OFF = 5, MISSING = 6 };
+
+constexpr uint8_t MAX_JOBS = 8;
+constexpr uint8_t MAX_MESH = 6;
+
+struct JobEntry {
+  char name[24] = {0};
+  JobState state = JobState::UNKNOWN;
+  float ageH = NAN;  // Stunden seit dem letzten Lauf
+};
+
+struct MeshEntry {
+  char name[20] = {0};
+  bool connected = false;
+};
+
+// Ampelstufe aus der Diagnose: 0 unbekannt, 1 gruen, 2 gelb, 3 rot
+struct DiagInfo {
+  bool present = false;   // Diagnose-Datei auf dem Pi vorhanden und lesbar
+  char err[8] = {0};      // "perm" / "read", sonst leer
+  uint16_t ageS = 0;
+  uint8_t netLevel = 0;
+  uint8_t devLevel = 0;
+  String netText;
+  String devText;
+  String offline;         // Namen der nicht erreichbaren wichtigen Geraete
+  int16_t devOnline = -1;
+  int16_t devTotal = -1;
+  String wanDsl;
+  String wanOnline;
+  uint32_t wanDown = 0;   // Rohwerte vom Router (Einheit laut Router)
+  uint32_t wanUp = 0;
+  MeshEntry mesh[MAX_MESH];
+  uint8_t meshCount = 0;
+  int16_t failovers24h = -1;
+  int16_t failovers7d = -1;
+};
+
 // Tri-State fuer Pruefergebnisse: -1 unbekannt, 0 fehlgeschlagen, 1 ok
 struct StatusPoint {
   bool reachable = false;
@@ -52,6 +91,9 @@ struct StatusPoint {
   int8_t dnsLocal = -1;
   int8_t dnsVip = -1;
   int8_t dnsPizero = -1;
+  int16_t dnsMsLocal = -1;  // Antwortzeit in ms, -1 = unbekannt
+  int16_t dnsMsVip = -1;
+  int16_t dnsMsPizero = -1;
 
   ServiceEntry services[MAX_SERVICES];
   uint8_t serviceCount = 0;
@@ -65,6 +107,10 @@ struct StatusPoint {
   float diskUsedPct = NAN;
   float diskFreeGb = NAN;
   float backupAgeH = NAN;
+
+  JobEntry jobs[MAX_JOBS];
+  uint8_t jobCount = 0;
+  DiagInfo diag;
 };
 
 constexpr uint8_t HISTORY_SIZE = 48;

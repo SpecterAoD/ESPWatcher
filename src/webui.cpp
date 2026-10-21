@@ -108,6 +108,32 @@ const char* svcClass(const ServiceEntry& e) {
 const char* checkClass(int8_t v) { return v == 1 ? "ok" : (v == 0 ? "bad" : ""); }
 const char* checkText(int8_t v) { return v == 1 ? "antwortet" : (v == 0 ? "keine Antwort" : "unbekannt"); }
 
+const char* jobClass(JobState st) {
+  switch (st) {
+    case JobState::OK: return "ok";
+    case JobState::RUN: return "ok";
+    case JobState::FAIL: return "bad";
+    case JobState::LATE: return "warn";
+    case JobState::OFF: return "warn";
+    default: return "";
+  }
+}
+
+const char* levelClass(uint8_t level) { return level == 1 ? "ok" : (level == 2 ? "warn" : (level == 3 ? "bad" : "")); }
+
+String hoursText(float h) {
+  if (isnan(h)) return String(F("–"));
+  if (h < 1.0f) return String(F("< 1 h"));
+  if (h < 48.0f) return String(h, 0) + " h";
+  return String(h / 24.0f, 0) + " Tage";
+}
+
+String dnsText(int8_t ok, int16_t ms) {
+  String t = checkText(ok);
+  if (ok == 1 && ms >= 0) t += String(" (") + ms + " ms)";
+  return t;
+}
+
 const char* thresholdClass(float v, float warn, float bad) {
   if (isnan(v)) return "";
   if (v >= bad) return "bad";
@@ -166,10 +192,57 @@ void sendDashboard() {
   // --- DNS-Pruefungen -----------------------------------------------------
   if (st.reachable) {
     b += F("<h2>DNS-Erreichbarkeit</h2><div class='tiles'>");
-    tile(b, checkClass(st.dnsLocal), "piholepi", checkText(st.dnsLocal));
-    tile(b, checkClass(st.dnsVip), "VIP " DNS_VIP, checkText(st.dnsVip));
-    tile(b, checkClass(st.dnsPizero), "pizero", checkText(st.dnsPizero));
+    tile(b, checkClass(st.dnsLocal), "piholepi", dnsText(st.dnsLocal, st.dnsMsLocal));
+    tile(b, checkClass(st.dnsVip), "VIP " DNS_VIP, dnsText(st.dnsVip, st.dnsMsVip));
+    tile(b, checkClass(st.dnsPizero), "pizero", dnsText(st.dnsPizero, st.dnsMsPizero));
     b += F("</div>");
+    flush(b);
+  }
+
+  // --- Sicherungen --------------------------------------------------------
+  if (st.jobCount) {
+    b += F("<h2>Sicherungen &amp; Aufträge</h2><div class='tiles'>");
+    for (uint8_t i = 0; i < st.jobCount; ++i) {
+      const JobEntry& j = st.jobs[i];
+      String v = jobStateToText(j.state);
+      if ((j.state == JobState::OK || j.state == JobState::LATE || j.state == JobState::FAIL) && !isnan(j.ageH)) {
+        v += String(F(" · vor ")) + hoursText(j.ageH);
+      }
+      tile(b, jobClass(j.state), esc(j.name).c_str(), v);
+    }
+    b += F("</div>");
+    flush(b);
+  }
+
+  // --- Netz und Geraete ---------------------------------------------------
+  if (st.diag.present) {
+    const DiagInfo& d = st.diag;
+    b += F("<h2>Netz &amp; Geräte</h2><div class='tiles'>");
+    tile(b, levelClass(d.netLevel), "Netzwerk", d.netText.length() ? esc(d.netText) : String(F("ok")));
+    String dev = d.devTotal >= 0 ? String(d.devOnline) + "/" + d.devTotal + " erreichbar" : String(F("–"));
+    if (d.offline.length()) dev += String(F(" · offline: ")) + d.offline;
+    tile(b, levelClass(d.devLevel), "Wichtige Geräte", esc(dev));
+    if (d.wanDsl.length() || d.wanOnline.length()) {
+      const bool wanOk = d.wanDsl == "online" && d.wanOnline == "online";
+      tile(b, wanOk ? "ok" : "bad", "Internet (DSL)", wanOk ? String(F("online")) : esc(d.wanDsl + " / " + d.wanOnline));
+    }
+    if (d.wanDown || d.wanUp) {
+      tile(b, "", "Router: Down / Up (Rohwerte)", String(d.wanDown) + " / " + d.wanUp);
+    }
+    for (uint8_t i = 0; i < d.meshCount; ++i) {
+      tile(b, d.mesh[i].connected ? "ok" : "bad", (String("Mesh ") + esc(d.mesh[i].name)).c_str(),
+           d.mesh[i].connected ? String(F("verbunden")) : String(F("getrennt")));
+    }
+    if (d.failovers24h >= 0) {
+      tile(b, d.failovers24h > 0 ? "warn" : "ok", "DNS-Umschaltungen",
+           String(d.failovers24h) + " in 24 h / " + d.failovers7d + " in 7 Tagen");
+    }
+    b += F("</div>");
+    flush(b);
+  } else if (st.diag.err[0]) {
+    b += F("<div class='banner note'>Netz-Diagnose auf dem Pi nicht lesbar (");
+    b += esc(String(st.diag.err));
+    b += F(") – Rechte auf /run/mirror-diag/diag.json prüfen</div>");
     flush(b);
   }
 

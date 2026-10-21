@@ -55,6 +55,43 @@ HealthState evaluateHealth(const MetricPoint& point, const StatusPoint& status, 
     if (status.dnsVip == 0) c.add(HealthState::RED, "DNS-VIP antwortet nicht");
     if (status.dnsPizero == 0) c.add(HealthState::YELLOW, "DNS auf pizero antwortet nicht");
 
+    const int16_t slow = max(status.dnsMsLocal, max(status.dnsMsVip, status.dnsMsPizero));
+    if (slow > 800) {
+      c.add(HealthState::YELLOW, String("DNS antwortet langsam (") + slow + " ms)");
+    }
+
+    for (uint8_t i = 0; i < status.jobCount; ++i) {
+      const JobEntry& j = status.jobs[i];
+      if (j.state == JobState::FAIL) {
+        c.add(HealthState::YELLOW, String(j.name) + ": fehlgeschlagen");
+      } else if (j.state == JobState::LATE) {
+        c.add(HealthState::YELLOW, String(j.name) + ": überfällig (" + String(j.ageH, 0) + " h)");
+      } else if (j.state == JobState::OFF) {
+        c.add(HealthState::YELLOW, String(j.name) + ": Timer aus");
+      }
+    }
+
+    const DiagInfo& d = status.diag;
+    if (d.present) {
+      if (d.ageS > 180) {
+        c.add(HealthState::YELLOW, "Netz-Diagnose veraltet");
+      }
+      if ((d.wanDsl.length() && d.wanDsl != "online") || (d.wanOnline.length() && d.wanOnline != "online")) {
+        c.add(HealthState::RED, "Internet/DSL nicht online");
+      }
+      if (d.netLevel == 3) {
+        c.add(HealthState::YELLOW, String("Netz: ") + d.netText);
+      }
+      if (d.devLevel == 3 && d.offline.length()) {
+        c.add(HealthState::YELLOW, String("Geräte offline: ") + d.offline);
+      }
+      for (uint8_t i = 0; i < d.meshCount; ++i) {
+        if (!d.mesh[i].connected) {
+          c.add(HealthState::YELLOW, String("Mesh ") + d.mesh[i].name + " getrennt");
+        }
+      }
+    }
+
     if (status.diskMounted == 0) {
       c.add(HealthState::YELLOW, "Datenplatte nicht eingehängt");
     } else if (!isnan(status.diskUsedPct) && status.diskUsedPct > 90.0f) {

@@ -17,6 +17,16 @@ Die Dienstliste lässt sich in `espwatcher-status.py` (`DEFAULT_SERVICES`) oder 
 `ESPW_SERVICES="name:1,name:0"` anpassen (`1` = kritisch).
 Der Name der WireGuard-Einheit (z. B. `wg-quick@wg0`) ist nicht vorbelegt.
 
+## Sicherungen, Netz und Geräte (ab 3.6.0)
+
+- **Sicherungen:** pro Eintrag in `ESPW_JOBS` (Standard: `rsync-pull`, `restic-backup`, `raspiBackup`, `zero-backup`,
+  `backup-verify`, `netalertx-db-backup`) wird der systemd-Dienst und der gleichnamige Timer gelesen: ok, überfällig,
+  fehlgeschlagen, läuft, Timer aus. „Überfällig“ heißt: älter als zwei Timer-Perioden. Es werden keine Skripte geändert.
+- **Netz und Geräte:** wenn `mirror-diag` läuft, liest der Dienst dessen `/run/mirror-diag/diag.json` (nur lesend, nur
+  ausgewählte Felder: Zusammenfassungen, nicht erreichbare Geräte, Mesh-Knoten, Internet/DSL, DNS-Umschaltungen).
+  Das Router-Passwort wird dafür nicht gebraucht und nie weitergegeben. Fehlt die Datei, bleibt der Bereich weg.
+- **DNS-Antwortzeit:** lokal, VIP und pizero; über 800 ms zeigt der ESP gelb.
+
 ## Installation (auf dem piholepi)
 
 ```bash

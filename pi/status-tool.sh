@@ -38,6 +38,18 @@ print("DNS antwortet   : lokal=%s vip=%s pizero=%s" % (dns.get("local"), dns.get
 for s in d.get("svc", []):
     mark = "OK " if s["s"] == "active" else "!! "
     print("  %s%-20s %-9s%s" % (mark, s["n"], s["s"], " (kritisch)" if s["c"] else ""))
+jobs = d.get("jobs", [])
+if jobs:
+    print("Sicherungen:")
+    for j in jobs:
+        print("  %-22s %-8s %s" % (j["n"], j["s"], ("vor %s h" % j["a"]) if "a" in j else ""))
+diag = d.get("diag")
+if diag is None:
+    print("Netz-Diagnose   : keine Datei (mirror-diag nicht aktiv?)")
+elif "err" in diag:
+    print("Netz-Diagnose   : nicht lesbar (%s) - Rechte auf /run/mirror-diag/diag.json pruefen" % diag["err"])
+else:
+    print("Netz-Diagnose   : netz=%s | geraete=%s | offline=%s | internet=%s" % (diag["net"]["s"], diag["dev"]["s"], diag.get("off"), diag.get("wan")))
 print("Platte          :", d.get("disk"))
 print("Temp/Load/RAM   :", d.get("temp"), d.get("load1"), d.get("mem"))
 print("Unterspannung   :", d.get("thr"))
