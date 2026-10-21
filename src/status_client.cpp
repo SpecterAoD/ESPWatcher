@@ -1,5 +1,7 @@
 #include "status_client.h"
 
+#include <new>
+
 #include <ArduinoJson.h>
 #include <ESP8266HTTPClient.h>
 #include <ESP8266WiFi.h>
@@ -76,7 +78,9 @@ const char* svcStateToText(SvcState state) {
 }
 
 bool statusPoll(StatusPoint& out) {
-  out = StatusPoint{};
+  // an Ort und Stelle neu aufbauen, ohne grosses Zwischenobjekt auf dem Stack
+  out.~StatusPoint();
+  new (&out) StatusPoint();
 
   if (WiFi.status() != WL_CONNECTED) {
     return false;
