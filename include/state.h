@@ -47,6 +47,7 @@ enum class JobState : uint8_t { UNKNOWN = 0, OK = 1, LATE = 2, FAIL = 3, RUN = 4
 
 constexpr uint8_t MAX_JOBS = 8;
 constexpr uint8_t MAX_MESH = 6;
+constexpr uint8_t MAX_DEVS = 30;
 
 struct JobEntry {
   char name[24] = {0};
@@ -57,6 +58,14 @@ struct JobEntry {
 struct MeshEntry {
   char name[20] = {0};
   bool connected = false;
+};
+
+struct DevEntry {
+  char name[24] = {0};  // z. B. "infra-mesh-wz", "kalipi"
+  uint8_t state = 0;    // 0 unbekannt, 1 gruen, 2 gelb, 3 rot
+  bool online = false;
+  int16_t ms = -1;      // Ping in ms, -1 = unbekannt
+  int16_t rssi = 0;     // WLAN-Signal in dBm, 0 = kein WLAN/unbekannt
 };
 
 // Ampelstufe aus der Diagnose: 0 unbekannt, 1 gruen, 2 gelb, 3 rot
@@ -76,6 +85,8 @@ struct DiagInfo {
   String wanOnline;
   uint32_t wanDown = 0;   // Rohwerte vom Router (Einheit laut Router)
   uint32_t wanUp = 0;
+  DevEntry devs[MAX_DEVS];
+  uint8_t devCount = 0;
   MeshEntry mesh[MAX_MESH];
   uint8_t meshCount = 0;
   int16_t failovers24h = -1;

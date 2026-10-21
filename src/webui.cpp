@@ -82,7 +82,7 @@ struct Cat {
 const char* lvlClass(uint8_t lvl) { return lvl == 1 ? "ok" : (lvl == 2 ? "warn" : (lvl == 3 ? "bad" : "")); }
 
 struct Cats {
-  Cat dns, svc, jobs, net, sys, esp;
+  Cat dns, svc, jobs, net, dev, sys, esp;
 };
 
 uint8_t worse(uint8_t a, uint8_t b) { return a > b ? a : b; }
@@ -168,13 +168,30 @@ Cat catNet(const StatusPoint& st) {
   c.lvl = 1;
   const bool wanKnown = d.wanDsl.length() || d.wanOnline.length();
   const bool wanOk = d.wanDsl == "online" && d.wanOnline == "online";
-  if (d.devTotal >= 0) c.text = String(d.devOnline) + "/" + d.devTotal + " Geräte";
-  if (wanKnown) c.text += String(c.text.length() ? " · " : "") + "Internet " + (wanOk ? "online" : "gestört");
+  if (wanKnown) c.text = String("Internet ") + (wanOk ? "online" : "gestört");
+  uint8_t meshUp = 0;
+  for (uint8_t i = 0; i < d.meshCount; ++i) meshUp += d.mesh[i].connected ? 1 : 0;
+  if (d.meshCount) c.text += String(c.text.length() ? " · " : "") + "Mesh " + meshUp + "/" + d.meshCount;
   if (wanKnown && !wanOk) c.lvl = 3;
-  bool meshDown = false;
-  for (uint8_t i = 0; i < d.meshCount; ++i) meshDown = meshDown || !d.mesh[i].connected;
-  if (c.lvl < 3 && (d.netLevel == 3 || d.devLevel == 3 || meshDown || d.ageS > 180)) c.lvl = 2;
-  if (d.offline.length()) c.text += String(" · offline: ") + d.offline;
+  if (c.lvl < 3 && (d.netLevel == 3 || meshUp < d.meshCount || d.ageS > 180)) c.lvl = 2;
+  return c;
+}
+
+Cat catDev(const StatusPoint& st) {
+  Cat c;
+  const DiagInfo& d = st.diag;
+  if (!d.present) {
+    c.text = String(F("keine Diagnose"));
+    return c;
+  }
+  c.lvl = 1;
+  if (d.devTotal >= 0) c.text = String(d.devOnline) + "/" + d.devTotal + " erreichbar";
+  if (d.offline.length()) {
+    c.lvl = 2;
+    c.text += String(" · offline: ") + d.offline;
+  } else if (d.weak.length()) {
+    c.text += String(" · Warnung: ") + d.weak;
+  }
   return c;
 }
 
@@ -214,6 +231,7 @@ Cats allCats() {
   c.svc = catSvc(s->status);
   c.jobs = catJobs(s->status);
   c.net = catNet(s->status);
+  c.dev = catDev(s->status);
   c.sys = catSys(s->status, s->latest);
   c.esp = catEsp();
   return c;
@@ -249,6 +267,7 @@ void beginPage(const char* active, bool autoRefresh) {
   navLink(head, "/dienste", "Dienste", active, c.svc.lvl);
   navLink(head, "/sicherungen", "Sicherungen", active, c.jobs.lvl);
   navLink(head, "/netz", "Netz", active, c.net.lvl);
+  navLink(head, "/geraete", "Geräte", active, c.dev.lvl);
   navLink(head, "/system", "System", active, c.sys.lvl);
   navLink(head, "/charts", "Verlauf", active, 0);
   navLink(head, "/esp", "ESP", active, c.esp.lvl);
@@ -357,7 +376,7 @@ void sendOverview() {
   b += F("'><b>");
   b += healthToGerman(s->systemHealth);
   b += F("</b>");
-  if (s->healthReason.length()) {
+  if (s->systemHealth != HealthState::GREEN && s->healthReason.length()) {
     b += F("<ul>");
     int start = 0;
     while (start < static_cast<int>(s->healthReason.length())) {
@@ -370,7 +389,7 @@ void sendOverview() {
     }
     b += F("</ul>");
   } else {
-    b += F("<div>Alles läuft.</div>");
+    b += F("<div>Keine Probleme erkannt.</div>");
   }
   b += F("</div>");
   noData(b, st);
@@ -380,7 +399,8 @@ void sendOverview() {
   card(b, "/dns", "DNS", c.dns);
   card(b, "/dienste", "Dienste", c.svc);
   card(b, "/sicherungen", "Sicherungen", c.jobs);
-  card(b, "/netz", "Netz &amp; Geräte", c.net);
+  card(b, "/netz", "Netz", c.net);
+  card(b, "/geraete", "Geräte", c.dev);
   card(b, "/system", "System piholepi", c.sys);
   card(b, "/esp", "ESPWatcher", c.esp);
   b += F("</div>");
@@ -492,12 +512,6 @@ void sendNet() {
       }
       b += F("</div>");
     }
-    b += F("<h2>Wichtige Geräte</h2><div class='tiles'>");
-    String dev = d.devTotal >= 0 ? String(d.devOnline) + "/" + d.devTotal + " erreichbar" : String(F("–"));
-    tile(b, levelClass(d.devLevel), "Erreichbarkeit", dev);
-    if (d.offline.length()) tile(b, "bad", "Offline", esc(d.offline));
-    if (d.weak.length()) tile(b, "warn", "Warnung (z. B. schwaches WLAN)", esc(d.weak));
-    b += F("</div>");
     if (d.ageS > 180) {
       b += F("<div class='banner note'>Diagnose-Daten sind veraltet</div>");
     }
@@ -509,6 +523,64 @@ void sendNet() {
     b += F("<p>Keine Netz-Diagnose vom Pi (mirror-diag nicht aktiv).</p>");
   }
   flush(b);
+  endPage();
+}
+
+// ---- Geraete -------------------------------------------------------------------
+uint8_t devGroup(const char* name) {
+  if (strncmp(name, "infra-", 6) == 0) return 1;
+  if (strncmp(name, "voice-", 6) == 0) return 2;
+  if (strncmp(name, "client-", 7) == 0) return 3;
+  return 0;
+}
+
+const char* devDisplay(const char* name) {
+  const uint8_t g = devGroup(name);
+  return g == 1 || g == 2 ? name + 6 : (g == 3 ? name + 7 : name);
+}
+
+void sendDevices() {
+  const StatusPoint& st = s->status;
+  const DiagInfo& d = st.diag;
+  beginPage("/geraete", true);
+  String b;
+  noData(b, st);
+  if (!d.present) {
+    b += F("<p>Keine Geräte-Diagnose vom Pi (mirror-diag nicht aktiv oder nicht lesbar).</p>");
+    flush(b);
+    endPage();
+    return;
+  }
+  b += F("<h2>Überblick</h2><div class='tiles'>");
+  tile(b, levelClass(d.devLevel == 3 ? 2 : (d.devLevel ? 1 : 0)), "Erreichbar",
+       d.devTotal >= 0 ? String(d.devOnline) + "/" + d.devTotal : String(F("–")));
+  if (d.offline.length()) tile(b, "bad", "Offline", esc(d.offline));
+  if (d.weak.length()) tile(b, "warn", "Warnung (z. B. schwaches WLAN)", esc(d.weak));
+  b += F("</div>");
+  flush(b);
+
+  static const char* const groups[] = {"Server &amp; Pis", "Infrastruktur", "Sprachassistenten", "Clients"};
+  for (uint8_t g = 0; g < 4; ++g) {
+    bool any = false;
+    for (uint8_t i = 0; i < d.devCount; ++i) {
+      const DevEntry& e = d.devs[i];
+      if (devGroup(e.name) != g) continue;
+      if (!any) {
+        b += F("<h2>");
+        b += groups[g];
+        b += F("</h2><div class='tiles'>");
+        any = true;
+      }
+      String v = e.online ? String(F("online")) : String(F("offline"));
+      if (e.online && e.ms >= 0) v += String(" · ") + e.ms + " ms";
+      if (e.rssi != 0) v += String(" · ") + e.rssi + " dBm";
+      tile(b, levelClass(e.state), esc(devDisplay(e.name)).c_str(), v);
+    }
+    if (any) {
+      b += F("</div>");
+      flush(b);
+    }
+  }
   endPage();
 }
 
@@ -577,7 +649,11 @@ void sendEsp() {
   b += String(WiFi.RSSI());
   b += F(" dBm</td></tr><tr><td>Uhrzeit</td><td>");
   b += esc(s->currentTime);
-  b += F("</td></tr><tr><td>Netdata</td><td>");
+  b += F("</td></tr><tr><td>Freier Speicher</td><td>");
+  b += String(ESP.getFreeHeap() / 1024UL);
+  b += F(" KB</td></tr><tr><td>Laufzeit</td><td>");
+  b += String(millis() / 3600000UL);
+  b += F(" h</td></tr><tr><td>Netdata</td><td>");
   b += m.netdataReachable ? F("erreichbar") : F("nicht erreichbar");
   b += F("</td></tr><tr><td>Fehlende Netdata-Werte</td><td>");
   b += m.unavailableMetrics.length() ? esc(m.unavailableMetrics) : String(F("keine"));
@@ -695,6 +771,7 @@ void webSetup(AppState& state) {
   server.on("/dienste", sendServices);
   server.on("/sicherungen", sendJobs);
   server.on("/netz", sendNet);
+  server.on("/geraete", sendDevices);
   server.on("/system", sendSystem);
   server.on("/esp", sendEsp);
   server.on("/links", sendEsp);

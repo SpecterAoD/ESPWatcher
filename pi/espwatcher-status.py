@@ -334,6 +334,13 @@ def read_diag():
     out = {"age_s": round(age), "dns": summ("dns"), "net": summ("netz"), "dev": summ("geraete")}
     devices = [x for x in (d5.get("devices") or []) if isinstance(x, dict)]
     out["off"] = [short(x.get("name", "?")) for x in devices if x.get("state") == "rot"][:6]
+    code = {"gruen": 1, "gelb": 2, "rot": 3}
+    out["devs"] = [
+        [str(x.get("name", "?"))[:21], code.get(x.get("state"), 0), 1 if x.get("online") else 0,
+         round(x["ms"]) if isinstance(x.get("ms"), (int, float)) else -1,
+         int((x.get("mesh") or {}).get("rssi") or 0)]
+        for x in devices
+    ][:30]
     out["warn"] = [short(x.get("name", "?")) for x in devices if x.get("state") == "gelb"][:6]
     out["n_dev"] = [sum(1 for x in devices if x.get("online")), len(devices)]
     dsl = d4.get("dsl") or {}

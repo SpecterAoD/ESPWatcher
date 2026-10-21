@@ -103,7 +103,7 @@ bool statusPoll(StatusPoint& out) {
     return false;
   }
 
-  DynamicJsonDocument doc(6144);
+  DynamicJsonDocument doc(8192);
   DeserializationError err = deserializeJson(doc, http.getStream());
   http.end();
   if (err) {
@@ -173,6 +173,15 @@ bool statusPoll(StatusPoint& out) {
     for (JsonVariantConst name : diag["warn"].as<JsonArrayConst>()) {
       if (d.weak.length()) d.weak += ", ";
       d.weak += String(name | "?");
+    }
+    for (JsonArrayConst row : diag["devs"].as<JsonArrayConst>()) {
+      if (d.devCount >= MAX_DEVS) break;
+      DevEntry& e = d.devs[d.devCount++];
+      strlcpy(e.name, row[0] | "?", sizeof(e.name));
+      e.state = static_cast<uint8_t>(row[1] | 0);
+      e.online = (row[2] | 0) != 0;
+      e.ms = static_cast<int16_t>(row[3] | -1);
+      e.rssi = static_cast<int16_t>(row[4] | 0);
     }
     d.devOnline = optInt(diag["n_dev"][0]);
     d.devTotal = optInt(diag["n_dev"][1]);
