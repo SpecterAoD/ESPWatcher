@@ -221,13 +221,16 @@ void sendDashboard() {
     tile(b, levelClass(d.netLevel), "Netzwerk", d.netText.length() ? esc(d.netText) : String(F("ok")));
     String dev = d.devTotal >= 0 ? String(d.devOnline) + "/" + d.devTotal + " erreichbar" : String(F("–"));
     if (d.offline.length()) dev += String(F(" · offline: ")) + d.offline;
+    if (d.weak.length()) dev += String(F(" · Warnung: ")) + d.weak;
     tile(b, levelClass(d.devLevel), "Wichtige Geräte", esc(dev));
     if (d.wanDsl.length() || d.wanOnline.length()) {
       const bool wanOk = d.wanDsl == "online" && d.wanOnline == "online";
       tile(b, wanOk ? "ok" : "bad", "Internet (DSL)", wanOk ? String(F("online")) : esc(d.wanDsl + " / " + d.wanOnline));
     }
     if (d.wanDown || d.wanUp) {
-      tile(b, "", "Router: Down / Up (Rohwerte)", String(d.wanDown) + " / " + d.wanUp);
+      // Der Router meldet die Anschlussgeschwindigkeit in kbit/s (keine aktuelle Last)
+      tile(b, "", "Anschluss laut Router (Down / Up)",
+           String(d.wanDown / 1000UL) + " / " + String(d.wanUp / 1000UL) + " Mbit/s");
     }
     for (uint8_t i = 0; i < d.meshCount; ++i) {
       tile(b, d.mesh[i].connected ? "ok" : "bad", (String("Mesh ") + esc(d.mesh[i].name)).c_str(),

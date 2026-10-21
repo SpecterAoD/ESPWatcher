@@ -178,9 +178,14 @@ class StatusTest(unittest.TestCase):
         old = "LoadState=loaded\nActiveState=inactive\nResult=success\nExecMainExitTimestamp=@%d\n" % (1_000_000 - 40 * 3600)
         self.assertEqual(self.job(old, "LoadState=not-found\n")["s"], "late")
 
-    def test_job_nie_gelaufen_ist_unbekannt(self):
+    def test_job_nach_neustart_nutzt_timerzeitpunkt(self):
         svc = "LoadState=loaded\nActiveState=inactive\nResult=success\nExecMainExitTimestamp=\n"
-        self.assertEqual(self.job(svc, self.TIMER_DAILY)["s"], "unknown")
+        self.assertEqual(self.job(svc, self.TIMER_DAILY), {"n": "j", "s": "ok", "a": 24.0})
+
+    def test_job_ganz_ohne_zeitpunkt_ist_unbekannt(self):
+        svc = "LoadState=loaded\nActiveState=inactive\nResult=success\nExecMainExitTimestamp=\n"
+        timer = "LoadState=loaded\nActiveState=active\nLastTriggerUSec=\nNextElapseUSecRealtime=@1000000\n"
+        self.assertEqual(self.job(svc, timer)["s"], "unknown")
 
     # --- Diagnose von mirror-diag -------------------------------------------------
     def test_diag_zusammenfassung(self):
@@ -194,7 +199,7 @@ class StatusTest(unittest.TestCase):
                            "firmware": "geheim?", "since": "x"},
                    "mesh": {"nodes": [{"name": "infra-mesh-wz", "connected": True, "mac": "aa"},
                                       {"name": "infra-mesh-sz", "connected": False}]}},
-            "d5": {"devices": [{"name": "infra-diskstation", "state": "gruen", "online": True},
+            "d5": {"devices": [{"name": "infra-diskstation", "state": "gelb", "online": True},
                                {"name": "kalipi", "state": "rot", "online": False}]},
         }
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
@@ -206,6 +211,7 @@ class StatusTest(unittest.TestCase):
             os.unlink(fh.name)
         self.assertEqual(out["net"], {"s": "gelb", "t": "mesh-sz: 40 ms"})
         self.assertEqual(out["off"], ["kalipi"])
+        self.assertEqual(out["warn"], ["diskstation"])
         self.assertEqual(out["n_dev"], [1, 2])
         self.assertEqual(out["wan"], {"dsl": "online", "on": "online", "down": 120000, "up": 40000})
         self.assertEqual(out["mesh"], [{"n": "mesh-wz", "c": 1}, {"n": "mesh-sz", "c": 0}])

@@ -116,7 +116,7 @@ cmd_install() {
     rm -rf "$tmp"
     # ufw: Port nur fuer das LAN freigeben (additiv, nur wenn ufw aktiv ist)
     if command -v ufw >/dev/null && ufw status | grep -q "^Status: active"; then
-        if ! ufw status | grep -E "^$PORT/tcp +ALLOW +192\.168\.2\.0/24" >/dev/null; then
+        if ! ufw status | grep -E "^$PORT/tcp.*ALLOW.*192\.168\.2\.0/24" >/dev/null; then
             ufw allow from 192.168.2.0/24 to any port "$PORT" proto tcp comment 'ESPWatcher Status LAN' >/dev/null
             echo "ufw: Port $PORT fuer 192.168.2.0/24 freigegeben"
         fi

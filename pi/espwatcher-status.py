@@ -251,6 +251,10 @@ def job_state(name, now=None):
 
     last = unix_ts(svc.get("ExecMainExitTimestamp"))
     entry = {"n": name}
+    timer = unit_props(name + ".timer", ["LoadState", "ActiveState", "LastTriggerUSec", "NextElapseUSecRealtime"]) or {}
+    if not last:
+        # systemd vergisst Laufzeiten beim Neustart; Timer mit Persistent=true merken den letzten Start
+        last = unix_ts(timer.get("LastTriggerUSec"))
     if last:
         entry["a"] = round((now - last) / 3600.0, 1)
     if svc.get("Result", "success") not in ("", "success"):
@@ -260,7 +264,6 @@ def job_state(name, now=None):
         entry["s"] = "unknown"
         return entry
 
-    timer = unit_props(name + ".timer", ["LoadState", "ActiveState", "LastTriggerUSec", "NextElapseUSecRealtime"]) or {}
     has_timer = timer.get("LoadState") == "loaded"
     if has_timer and timer.get("ActiveState") != "active":
         entry["s"] = "off"
@@ -314,6 +317,7 @@ def read_diag():
     out = {"age_s": round(age), "dns": summ("dns"), "net": summ("netz"), "dev": summ("geraete")}
     devices = [x for x in (d5.get("devices") or []) if isinstance(x, dict)]
     out["off"] = [short(x.get("name", "?")) for x in devices if x.get("state") == "rot"][:6]
+    out["warn"] = [short(x.get("name", "?")) for x in devices if x.get("state") == "gelb"][:6]
     out["n_dev"] = [sum(1 for x in devices if x.get("online")), len(devices)]
     dsl = d4.get("dsl") or {}
     out["wan"] = {k: dsl.get(src) for k, src in

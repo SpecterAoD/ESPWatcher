@@ -170,6 +170,10 @@ bool statusPoll(StatusPoint& out) {
       if (d.offline.length()) d.offline += ", ";
       d.offline += String(name | "?");
     }
+    for (JsonVariantConst name : diag["warn"].as<JsonArrayConst>()) {
+      if (d.weak.length()) d.weak += ", ";
+      d.weak += String(name | "?");
+    }
     d.devOnline = optInt(diag["n_dev"][0]);
     d.devTotal = optInt(diag["n_dev"][1]);
     d.wanDsl = String(diag["wan"]["dsl"] | "");

@@ -69,6 +69,7 @@ struct DiagInfo {
   String netText;
   String devText;
   String offline;         // Namen der nicht erreichbaren wichtigen Geraete
+  String weak;            // Geraete mit Warnung (z. B. schwaches WLAN-Signal)
   int16_t devOnline = -1;
   int16_t devTotal = -1;
   String wanDsl;
