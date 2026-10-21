@@ -25,6 +25,39 @@ void beginWifi() {
   }
 }
 
+const char* statusText(wl_status_t status) {
+  switch (status) {
+    case WL_NO_SSID_AVAIL: return "SSID nicht gefunden (Name falsch, 5 GHz oder zu weit weg)";
+    case WL_CONNECT_FAILED: return "Anmeldung abgelehnt (Passwort oder Verschluesselung)";
+    case WL_CONNECTION_LOST: return "Verbindung verloren";
+    case WL_WRONG_PASSWORD: return "falsches Passwort";
+    case WL_DISCONNECTED: return "nicht verbunden";
+    case WL_IDLE_STATUS: return "verbindet gerade";
+    default: return "unbekannt";
+  }
+}
+
+// Zeigt, welche Netze der ESP sieht (ohne Passwoerter), und ob das gesuchte dabei ist.
+void logScan() {
+  String target = hasCompiledCredentials() ? String(WIFI_SSID) : WiFi.SSID();
+  int count = WiFi.scanNetworks();
+  if (count < 0) {
+    logMessage("WIFI", "Scan fehlgeschlagen", LogLevel::WARN);
+    return;
+  }
+  bool found = false;
+  for (int i = 0; i < count; i++) {
+    if (WiFi.SSID(i) == target) found = true;
+    if (i < 8) {
+      logMessage("WIFI", String("  sichtbar: '") + WiFi.SSID(i) + "' Kanal " + WiFi.channel(i) + " " +
+                             WiFi.RSSI(i) + " dBm" + (WiFi.encryptionType(i) == ENC_TYPE_NONE ? " offen" : ""));
+    }
+  }
+  logMessage("WIFI", String("Gesuchtes Netz '") + target + "' " + (found ? "ist sichtbar" : "wird NICHT gesehen"),
+             found ? LogLevel::INFO : LogLevel::WARN);
+  WiFi.scanDelete();
+}
+
 void updateNetworkState(AppState& state) {
   state.deviceIp = WiFi.localIP().toString();
   state.dnsServer = WiFi.dnsIP(0).toString();
@@ -93,7 +126,11 @@ void wifiLoop(AppState& state) {
 
   if (!state.wifiConnected && millis() - lastRetry > WIFI_RETRY_MS) {
     lastRetry = millis();
-    logMessage("WIFI", "Retrying WiFi connect", LogLevel::WARN);
+    static uint8_t attempts = 0;
+    logMessage("WIFI", String("Retrying WiFi connect: ") + statusText(WiFi.status()), LogLevel::WARN);
+    if (attempts++ % 6 == 0) {
+      logScan();
+    }
     WiFi.disconnect();
     beginWifi();
   }
