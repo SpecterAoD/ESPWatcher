@@ -22,9 +22,17 @@ const char CSS[] PROGMEM =
     ":root{color-scheme:dark}"
     "body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:0;background:#101418;color:#e6e9ec}"
     "main{max-width:880px;margin:0 auto;padding:12px}"
-    "nav{display:flex;gap:2px;padding:8px 8px 0;background:#161c22;border-bottom:1px solid #2a323b;overflow-x:auto;white-space:nowrap}"
-    "nav a{color:#9fb4c7;text-decoration:none;font-weight:600;padding:8px 12px;border-radius:8px 8px 0 0}"
-    "nav a.act{background:#101418;color:#fff}"
+    ".top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px;padding:10px 14px;background:#161c22;border-bottom:1px solid #2a323b}"
+    ".top b{font-size:17px;flex:1}.burger{font-size:26px;line-height:1;cursor:pointer;padding:2px 8px;border-radius:8px;user-select:none}"
+    "#mn{position:absolute;opacity:0;pointer-events:none}"
+    "nav{position:fixed;top:0;left:0;bottom:0;width:270px;max-width:82vw;z-index:20;overflow-y:auto;background:#161c22;"
+    "border-right:1px solid #2a323b;padding:12px 10px;transform:translateX(-102%);transition:transform .2s ease}"
+    ".shade{position:fixed;inset:0;z-index:10;background:rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:opacity .2s}"
+    "#mn:checked~nav{transform:none;box-shadow:6px 0 24px rgba(0,0,0,.5)}#mn:checked~.shade{opacity:1;pointer-events:auto}"
+    "nav h3{margin:16px 8px 4px;font-size:11px;color:#6f7f8f;text-transform:uppercase;letter-spacing:.1em}"
+    "nav h3:first-child{margin-top:4px}"
+    "nav a{display:block;color:#b9c8d6;text-decoration:none;font-weight:600;padding:10px 12px;border-radius:8px}"
+    "nav a.act{background:#232c36;color:#fff}"
     ".dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;background:#5b6672}"
     ".dot.ok{background:#2ecc71}.dot.warn{background:#f1c40f}.dot.bad{background:#e74c3c}"
     ".cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px;margin-top:12px}"
@@ -280,6 +288,8 @@ void navLink(String& h, const char* href, const char* label, const char* active,
   h += F("</a>");
 }
 
+bool pageRefresh = false;
+
 void beginPage(const char* active, bool autoRefresh) {
   const Cats c = allCats();
   server.setContentLength(CONTENT_LENGTH_UNKNOWN);
@@ -288,20 +298,41 @@ void beginPage(const char* active, bool autoRefresh) {
   head += F("<!doctype html><html lang='de'><head><meta charset='utf-8'>");
   head += F("<meta name='viewport' content='width=device-width,initial-scale=1'>");
   head += F("<title>ESPWatcher</title>");
-  if (autoRefresh) head += F("<meta http-equiv='refresh' content='10'>");
+  pageRefresh = autoRefresh;
   flush(head);
   server.sendContent_P(CSS);
-  head += F("</head><body><nav>");
+
   const uint8_t overall = static_cast<uint8_t>(s->systemHealth) + 1;
+  const char* title = "ESPWatcher";
+  const struct {
+    const char* href;
+    const char* label;
+  } pages[] = {{"/", "Übersicht"},   {"/dns", "DNS"},       {"/dienste", "Dienste"},       {"/netz", "Netz"},
+               {"/geraete", "Geräte"}, {"/hosts", "Hosts & NAS"}, {"/system", "System"},   {"/sicherungen", "Sicherungen"},
+               {"/charts", "Verlauf"}, {"/links", "Links"},   {"/esp", "ESP"}};
+  for (const auto& pg : pages) {
+    if (strcmp(pg.href, active) == 0) title = pg.label;
+  }
+
+  head += F("</head><body><input type='checkbox' id='mn'><div class='top'><label for='mn' class='burger'>&#9776;</label><b>");
+  head += title;
+  head += F("</b><i class='dot ");
+  head += lvlClass(overall);
+  head += F("'></i></div><label for='mn' class='shade'></label><nav>");
+  head += F("<h3>Überblick</h3>");
   navLink(head, "/", "Übersicht", active, overall);
+  head += F("<h3>Netz &amp; DNS</h3>");
   navLink(head, "/dns", "DNS", active, c.dns.lvl);
   navLink(head, "/dienste", "Dienste", active, c.svc.lvl);
-  navLink(head, "/sicherungen", "Sicherungen", active, c.jobs.lvl);
   navLink(head, "/netz", "Netz", active, c.net.lvl);
   navLink(head, "/geraete", "Geräte", active, c.dev.lvl);
-  navLink(head, "/hosts", "Hosts", active, c.hosts.lvl);
+  head += F("<h3>Server</h3>");
+  navLink(head, "/hosts", "Hosts &amp; NAS", active, c.hosts.lvl);
   navLink(head, "/system", "System", active, c.sys.lvl);
+  navLink(head, "/sicherungen", "Sicherungen", active, c.jobs.lvl);
+  head += F("<h3>Auswertung</h3>");
   navLink(head, "/charts", "Verlauf", active, 0);
+  head += F("<h3>Mehr</h3>");
   navLink(head, "/links", "Links", active, 0);
   navLink(head, "/esp", "ESP", active, c.esp.lvl);
   head += F("</nav><main>");
@@ -309,6 +340,10 @@ void beginPage(const char* active, bool autoRefresh) {
 }
 
 void endPage() {
+  // Neu laden alle 10 s, aber nicht, solange das Menue offen ist.
+  if (pageRefresh) {
+    server.sendContent_P(PSTR("<script>setInterval(function(){if(!document.getElementById('mn').checked)location.reload()},10000)</script>"));
+  }
   server.sendContent_P(PSTR("</main></body></html>"));
   server.sendContent("");
 }
