@@ -158,8 +158,14 @@ void wifiLoop(AppState& state) {
     if (attempts++ % 6 == 0) {
       logScan();
     }
-    WiFi.disconnect();
-    beginWifi();
+    // Nicht WiFi.disconnect(): beim ESP8266 setzt es SSID/Passwort auf leer und schreibt das wegen
+    // WiFi.persistent(true) in den Flash. Ohne eingebaute Zugangsdaten (CI-Build) waren sie danach
+    // weg und der ESP suchte nur noch ein Netz '' (13.11.2026). reconnect() behält die Daten.
+    if (hasCompiledCredentials()) {
+      beginWifi();
+    } else {
+      WiFi.reconnect();
+    }
   }
 
   lastConnected = state.wifiConnected;
